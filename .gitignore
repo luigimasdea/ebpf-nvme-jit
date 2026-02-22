@@ -1,0 +1,8 @@
+*.o
+*.elf
+*.bin
+*.out
+
+build/
+
+.gdb_history
