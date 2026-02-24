@@ -66,60 +66,46 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
 
     case BPF_ALU:
     case BPF_ALU64:
-      switch (BPF_OP(op)) {
-
-      case BPF_ADD:
+      if (BPF_OP(op) == BPF_MOV) {
+        // MOV is the only special case (it adds to ZERO, not to itself)
         if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
-          // Fast path: Small immediate
-          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rd, inst.imm));
-        } else {
-          // Universal path: Register-to-Register (using actual rs, or t0!)
-          emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_ADD, rd, rs, RV_F7_ADD));
-        }
-        break;
-
-      // Notice how simple SUB becomes!
-      // (Note: RISC-V doesn't have SUBI, so we always use R-Type for SUB)
-      case BPF_SUB:
-        if (BPF_SRC(op) == BPF_K) {
-          emit_load_imm(RV_REG_T0, inst.imm);
-          rs = RV_REG_T0;
-        }
-        emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_ADD, rd, rs, RV_F7_SUB));
-        break;
-
-      case BPF_OR:
-        if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
-            // Fast Path: ORI rd, rd, imm
-            emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_OR, rd, inst.imm));
-        } else {
-            // Universal Path: OR rd, rd, rs
-            emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_OR, rd, rs, 0x00));
-        }
-        break;
-
-      case BPF_AND:
-        if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
-            // Fast Path: ANDI rd, rd, imm
-            emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_AND, rd, inst.imm));
-        } else {
-            // Universal Path: AND rd, rd, rs
-            emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_AND, rd, rs, 0x00));
-        }
-        break;
-
-      case BPF_MOV:
-        if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
-          // Fast Path: Small constant (e.g., R0 = 42)
-          // RISC-V: ADDI rd, zero, imm
           emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, RV_REG_ZERO, inst.imm));
         } else {
-          // Universal Path: Register copy OR Large constant
-          // This handles "R0 = R1" AND "R0 = 50000" automatically!
-          // RISC-V: ADDI rd, rs, 0
           emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rs, 0));
         }
-        break;
+      } else {
+        // ALL OTHER MATH AND LOGIC OPERATIONS!
+        uint8_t f3 = 0;
+        uint8_t f7 = RV_F7_DEF;
+
+        // 1. Map eBPF opcode to RISC-V funct3 and funct7
+        switch (BPF_OP(op)) {
+        case BPF_ADD:
+          f3 = RV_F3_ADD;
+          break;
+        case BPF_SUB:
+          f3 = RV_F3_SUB;
+          f7 = RV_F7_SUB;
+          break;
+        case BPF_OR:
+          f3 = RV_F3_OR;
+          break;
+        case BPF_AND:
+          f3 = RV_F3_AND;
+          break;
+        }
+
+        // 2. Generate the instruction (Write this logic ONLY ONCE)
+        // Note: RISC-V does not have a "SUBI" instruction, so SUB must always
+        // use the R-Type path.
+        if (BPF_SRC(op) == BPF_K && BPF_OP(op) != BPF_SUB &&
+            inst.imm >= -2048 && inst.imm <= 2047) {
+          // Fast Path: I-Type Instruction
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, f3, rd, inst.imm));
+        } else {
+          // Universal Path: R-Type Instruction
+          emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, f3, rd, rs, f7));
+        }
       }
       break;
 

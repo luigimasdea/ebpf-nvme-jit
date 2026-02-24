@@ -44,14 +44,13 @@
 
 // FUNCT3
 #define RV_F3_ADD   0x0
+#define RV_F3_SUB   0x0
 #define RV_F3_OR    0x6
 #define RV_F3_AND   0x7
 
 //FUNCT7
-#define RV_F7_ADD   0x00
+#define RV_F7_DEF   0x00
 #define RV_F7_SUB   0x20
-#define RV_F7_OR    0x00
-#define RV_F7_AND    0x00
 
 /* =========================================================================
  * COSTRUTTORI DI ISTRUZIONI (Generazione Codice Macchina)
