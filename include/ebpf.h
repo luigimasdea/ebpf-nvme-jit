@@ -42,13 +42,14 @@ struct ebpf_inst {
 #define BPF_OP(code)    ((code) & 0xf0)
 
 // Operazioni Matematiche (ALU / ALU64)
-#define BPF_ADD   0x00  // Somma (+)
-#define BPF_SUB   0x10  // Sottrazione (-)
-#define BPF_MUL   0x20  // Moltiplicazione (*)
-#define BPF_DIV   0x30  // Divisione (/)
-#define BPF_OR    0x40  // OR Operator (||)
-#define BPF_AND   0x50  // AND Operator (&&)
-#define BPF_MOV   0xb0  // Muovi valore/registro
+#define BPF_ADD   0x00
+#define BPF_SUB   0x10
+#define BPF_MUL   0x20
+#define BPF_DIV   0x30
+#define BPF_OR    0x40
+#define BPF_AND   0x50
+#define BPF_XOR   0xa0
+#define BPF_MOV   0xb0
 
 // Operazioni di Salto (JMP)
 #define BPF_JA    0x00  // Salto incondizionato (Jump Always)

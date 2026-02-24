@@ -93,6 +93,9 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
         case BPF_AND:
           f3 = RV_F3_AND;
           break;
+        case BPF_XOR:
+          f3 = RV_F3_XOR;
+          break;
         }
 
         // 2. Generate the instruction (Write this logic ONLY ONCE)

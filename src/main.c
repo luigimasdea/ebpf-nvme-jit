@@ -20,7 +20,7 @@ int main() {
         { BPF_ALU | BPF_MOV | BPF_K, 1, 0, 0, 12 },
         
         // Instr 2: AND R0, R1 (R0 = R0 & R1)
-        { BPF_ALU | BPF_AND | BPF_X, 0, 1, 0, 0 },
+        { BPF_ALU | BPF_XOR | BPF_X, 0, 1, 0, 0 },
         
         // Instr 3: EXIT (Returns R0, expecting 8)
         { BPF_JMP | BPF_EXIT, 0, 0, 0, 0 }
