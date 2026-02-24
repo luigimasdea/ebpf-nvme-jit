@@ -8,7 +8,7 @@ CFLAGS = -march=rv64g -mabi=lp64 -mcmodel=medany -Wall -O0 -g -ffreestanding -no
 LDFLAGS = -T arch/linker.ld -nostdlib
 
 # File sorgenti
-SRCS = arch/boot.S src/main.c src/jit.c
+SRCS = arch/boot.S src/main.c src/jit.c src/utils.c
 TARGET = firmware.elf
 
 # --- Regole ---
@@ -26,6 +26,13 @@ run: $(TARGET)
 # Esegue QEMU in pausa, pronto per GDB
 debug: $(TARGET)
 	$(QEMU) -machine virt -bios none -kernel $(TARGET) -nographic -S -s
+
+# FIXME
+# Lancia QEMU in background e poi GDB in automatico
+test: $(TARGET)
+	$(QEMU) -machine virt -bios none -kernel $(TARGET) -nographic -S -s & \
+	sleep 1 && \
+	$(GDB) -batch $(TARGET)
 
 # Pulisce i file compilati
 clean:

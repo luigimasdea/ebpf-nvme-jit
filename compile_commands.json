@@ -55,5 +55,24 @@
     ],
     "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
     "output": "firmware.elf"
+  },
+  {
+    "file": "src/utils.c",
+    "arguments": [
+      "riscv64-linux-gnu-gcc",
+      "-march=rv64g",
+      "-mabi=lp64",
+      "-mcmodel=medany",
+      "-Wall",
+      "-O0",
+      "-g",
+      "-ffreestanding",
+      "-Iinclude",
+      "src/utils.c",
+      "-o",
+      "firmware.elf"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
+    "output": "firmware.elf"
   }
 ]
