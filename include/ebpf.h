@@ -46,6 +46,8 @@ struct ebpf_inst {
 #define BPF_SUB   0x10  // Sottrazione (-)
 #define BPF_MUL   0x20  // Moltiplicazione (*)
 #define BPF_DIV   0x30  // Divisione (/)
+#define BPF_OR    0x40  // OR Operator (||)
+#define BPF_AND   0x50  // AND Operator (&&)
 #define BPF_MOV   0xb0  // Muovi valore/registro
 
 // Operazioni di Salto (JMP)

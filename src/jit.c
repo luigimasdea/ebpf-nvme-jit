@@ -88,6 +88,26 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
         emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_ADD, rd, rs, RV_F7_SUB));
         break;
 
+      case BPF_OR:
+        if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
+            // Fast Path: ORI rd, rd, imm
+            emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_OR, rd, inst.imm));
+        } else {
+            // Universal Path: OR rd, rd, rs
+            emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_OR, rd, rs, 0x00));
+        }
+        break;
+
+      case BPF_AND:
+        if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
+            // Fast Path: ANDI rd, rd, imm
+            emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_AND, rd, inst.imm));
+        } else {
+            // Universal Path: AND rd, rd, rs
+            emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_AND, rd, rs, 0x00));
+        }
+        break;
+
       case BPF_MOV:
         if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
           // Fast Path: Small constant (e.g., R0 = 42)
