@@ -48,6 +48,7 @@ struct ebpf_inst {
 #define BPF_DIV   0x30
 #define BPF_OR    0x40
 #define BPF_AND   0x50
+#define BPF_NEG   0x80
 #define BPF_XOR   0xa0
 #define BPF_MOV   0xb0
 

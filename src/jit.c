@@ -66,51 +66,57 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
 
     case BPF_ALU:
     case BPF_ALU64:
-      if (BPF_OP(op) == BPF_MOV) {
-        // MOV is the only special case (it adds to ZERO, not to itself)
-        if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
-          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, RV_REG_ZERO, inst.imm));
-        } else {
-          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rs, 0));
-        }
-      } else {
-        // ALL OTHER MATH AND LOGIC OPERATIONS!
-        uint8_t f3 = 0;
-        uint8_t f7 = RV_F7_DEF;
+    switch (BPF_OP(op)) {
+        /* =======================================================
+         * 1. PSEUDO / UNARY OPERATIONS (Isolated)
+         * ======================================================= */
+        case BPF_MOV:
+            if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
+                // ADDI rd, zero, imm
+                emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, RV_REG_ZERO, inst.imm));
+            } else {
+                // ADDI rd, rs, 0 (This is the RISC-V 'MV' pseudo-instruction)
+                emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rs, 0));
+            }
+            break;
 
-        // 1. Map eBPF opcode to RISC-V funct3 and funct7
-        switch (BPF_OP(op)) {
+        case BPF_NEG: // eBPF NEG: rd = -rd
+            // RISC-V doesn't have NEG. We use: SUB rd, zero, rd
+            emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_SUB, RV_REG_ZERO, rd, RV_F7_SUB));
+            break;
+
+        /* =======================================================
+         * 2. GENERIC BINARY OPERATIONS (Grouped and Deduplicated)
+         * ======================================================= */
         case BPF_ADD:
-          f3 = RV_F3_ADD;
-          break;
         case BPF_SUB:
-          f3 = RV_F3_SUB;
-          f7 = RV_F7_SUB;
-          break;
-        case BPF_OR:
-          f3 = RV_F3_OR;
-          break;
         case BPF_AND:
-          f3 = RV_F3_AND;
-          break;
-        case BPF_XOR:
-          f3 = RV_F3_XOR;
-          break;
-        }
+        case BPF_OR:
+        case BPF_XOR: {
+            uint8_t f3 = 0;
+            uint8_t f7 = RV_F7_DEF;
 
-        // 2. Generate the instruction (Write this logic ONLY ONCE)
-        // Note: RISC-V does not have a "SUBI" instruction, so SUB must always
-        // use the R-Type path.
-        if (BPF_SRC(op) == BPF_K && BPF_OP(op) != BPF_SUB &&
-            inst.imm >= -2048 && inst.imm <= 2047) {
-          // Fast Path: I-Type Instruction
-          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, f3, rd, inst.imm));
-        } else {
-          // Universal Path: R-Type Instruction
-          emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, f3, rd, rs, f7));
+            // Map the specific hardware codes
+            if (BPF_OP(op) == BPF_ADD) { f3 = RV_F3_ADD; }
+            if (BPF_OP(op) == BPF_SUB) { f3 = RV_F3_SUB; f7 = RV_F7_SUB; }
+            if (BPF_OP(op) == BPF_AND) { f3 = RV_F3_AND; }
+            if (BPF_OP(op) == BPF_OR)  { f3 = RV_F3_OR; }
+            if (BPF_OP(op) == BPF_XOR) { f3 = RV_F3_XOR; }
+
+            // The single generation logic for all binary math
+            if (BPF_SRC(op) == BPF_K && BPF_OP(op) != BPF_SUB && inst.imm >= -2048 && inst.imm <= 2047) {
+                emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, f3, rd, inst.imm));
+            } else {
+                emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, f3, rd, rs, f7));
+            }
+            break;
         }
-      }
-      break;
+        
+        default:
+            // Unhandled ALU operation
+            break;
+    }
+    break;
 
     case BPF_JMP:
       if (BPF_OP(op) == BPF_EXIT) {
