@@ -2,14 +2,14 @@
 .global _start
 
 _start:
-    # Imposta lo Stack Pointer (sp).
-    # QEMU virt machine mappa la RAM partendo da 0x80000000.
-    # Mettiamo lo stack molto in alto.
+    # Set the Stack Pointer (sp).
+    # QEMU virt machine maps RAM starting from 0x80000000.
+    # Place the stack high in memory.
     li sp, 0x80200000
     
-    # Salta alla tua funzione main in C
+    # Jump to the C main function.
     call main
 
-    # Se il main finisce (non dovrebbe in un firmware), fermati qui all'infinito
+    # If main returns (which should not happen in firmware), loop here indefinitely.
 hang:
     j hang

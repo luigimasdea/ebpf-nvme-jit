@@ -1,6 +1,7 @@
 #include "jit.h"
 #include "ebpf.h"
 #include "riscv.h"
+#include <stdbool.h>
 
 static const uint8_t bpf2rv[11] = {
     RV_REG_A0, // eBPF R0  -> RISC-V a0 (Return value)
@@ -35,6 +36,20 @@ void emit_load_imm(uint8_t rd, int32_t imm) {
   emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rd, lo));
 }
 
+// Helper: Emit a generic ALU instruction (Register or Immediate)
+void emit_alu_generic(uint8_t rd, uint8_t rs, int32_t imm, bool use_imm, uint8_t f3, uint8_t f7) {
+  if (use_imm) {
+    // Note: RISC-V has no SUBI. We use ADDI with -imm.
+    if (f7 == RV_F7_SUB) {
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rd, -imm));
+    } else {
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, f3, rd, imm));
+    }
+  } else {
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, f3, rd, rs, f7));
+  }
+}
+
 void compile_ebpf(struct ebpf_inst *prog, int len) {
   pc_riscv = 0;
 
@@ -43,80 +58,46 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
     uint8_t op = inst.opcode;
 
     // 1. Instantly get the correct RISC-V destination register
-    // (We ensure we don't read out of bounds of our 11-register array)
     uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
 
     // 2. Determine the source (either a BPF register or our scratch register)
-    uint8_t rs = RV_REG_ZERO; // Default
+    uint8_t rs = RV_REG_ZERO;
+    bool use_imm = false;
 
     if (BPF_SRC(op) == BPF_X) {
-      // Source is another eBPF register
       rs = (inst.src_reg <= 10) ? bpf2rv[inst.src_reg] : RV_REG_ZERO;
     } else if (BPF_SRC(op) == BPF_K) {
-      // Source is a constant number.
-      if (inst.imm < -2048 || inst.imm > 2047) {
-        // It's huge! Load it into the scratch register 't0' first.
+      if (inst.imm >= -2048 && inst.imm <= 2047) {
+        use_imm = true;
+      } else {
+        // Large constant: Load it into 't0' and treat as register-source
         emit_load_imm(RV_REG_T0, inst.imm);
-        rs = RV_REG_T0; // Now, pretend the user asked for a register operation!
+        rs = RV_REG_T0;
       }
     }
 
-    // 3. The Unified Switch
+    // 3. Unified switch for instructions
     switch (BPF_CLASS(op)) {
-
     case BPF_ALU:
     case BPF_ALU64:
-    switch (BPF_OP(op)) {
-        /* =======================================================
-         * 1. PSEUDO / UNARY OPERATIONS (Isolated)
-         * ======================================================= */
-        case BPF_MOV:
-            if (BPF_SRC(op) == BPF_K && inst.imm >= -2048 && inst.imm <= 2047) {
-                // ADDI rd, zero, imm
-                emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, RV_REG_ZERO, inst.imm));
-            } else {
-                // ADDI rd, rs, 0 (This is the RISC-V 'MV' pseudo-instruction)
-                emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rs, 0));
-            }
-            break;
+      switch (BPF_OP(op)) {
+      case BPF_ADD: emit_alu_generic(rd, rs, inst.imm, use_imm, RV_F3_ADD, RV_F7_ADD); break;
+      case BPF_SUB: emit_alu_generic(rd, rs, inst.imm, use_imm, RV_F3_ADD, RV_F7_SUB); break;
+      case BPF_AND: emit_alu_generic(rd, rs, inst.imm, use_imm, RV_F3_AND, RV_F7_ADD); break;
+      case BPF_OR:  emit_alu_generic(rd, rs, inst.imm, use_imm, RV_F3_OR,  RV_F7_ADD); break;
+      case BPF_XOR: emit_alu_generic(rd, rs, inst.imm, use_imm, RV_F3_XOR, RV_F7_ADD); break;
 
-        case BPF_NEG: // eBPF NEG: rd = -rd
-            // RISC-V doesn't have NEG. We use: SUB rd, zero, rd
-            emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_SUB, RV_REG_ZERO, rd, RV_F7_SUB));
-            break;
-
-        /* =======================================================
-         * 2. GENERIC BINARY OPERATIONS (Grouped and Deduplicated)
-         * ======================================================= */
-        case BPF_ADD:
-        case BPF_SUB:
-        case BPF_AND:
-        case BPF_OR:
-        case BPF_XOR: {
-            uint8_t f3 = 0;
-            uint8_t f7 = RV_F7_DEF;
-
-            // Map the specific hardware codes
-            if (BPF_OP(op) == BPF_ADD) { f3 = RV_F3_ADD; }
-            if (BPF_OP(op) == BPF_SUB) { f3 = RV_F3_SUB; f7 = RV_F7_SUB; }
-            if (BPF_OP(op) == BPF_AND) { f3 = RV_F3_AND; }
-            if (BPF_OP(op) == BPF_OR)  { f3 = RV_F3_OR; }
-            if (BPF_OP(op) == BPF_XOR) { f3 = RV_F3_XOR; }
-
-            // The single generation logic for all binary math
-            if (BPF_SRC(op) == BPF_K && BPF_OP(op) != BPF_SUB && inst.imm >= -2048 && inst.imm <= 2047) {
-                emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, f3, rd, inst.imm));
-            } else {
-                emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, f3, rd, rs, f7));
-            }
-            break;
+      case BPF_MOV:
+        if (use_imm) {
+          // R_dest = constant
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, RV_REG_ZERO, inst.imm));
+        } else {
+          // R_dest = R_src (or R_dest = large constant via t0)
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, rs, 0));
         }
-        
-        default:
-            // Unhandled ALU operation
-            break;
-    }
-    break;
+        break;
+      }
+      break;
 
     case BPF_JMP:
       if (BPF_OP(op) == BPF_EXIT) {
@@ -127,15 +108,9 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
   }
 }
 
-int run_jit_filter(struct ebpf_inst *prog, int num_istruzioni) {
-
-  // 1. Compiliamo dinamicamente il program ricevuto dal main
-  compile_ebpf(prog, num_istruzioni);
-
-  // 2. Sincronizziamo la cache prima di eseguire
+int run_jit_filter(struct ebpf_inst *prog, int num_instructions) {
+  compile_ebpf(prog, num_instructions);
   asm volatile("fence.i");
-
-  // 3. Eseguiamo il codice RISC-V appena generato
-  int (*filtro)() = (int (*)())jit_memory;
-  return filtro();
+  int (*filter)() = (int (*)())jit_memory;
+  return filter();
 }
