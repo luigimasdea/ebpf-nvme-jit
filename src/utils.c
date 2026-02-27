@@ -34,3 +34,14 @@ void uart_print_int(int n) {
     
     uart_print(&buf[i+1]);
 }
+
+void uart_print_hex(uint32_t n) {
+    char hex_chars[] = "0123456789abcdef";
+    char buf[9];
+    buf[8] = '\0';
+    for (int i = 7; i >= 0; i--) {
+        buf[i] = hex_chars[n & 0xf];
+        n >>= 4;
+    }
+    uart_print(buf);
+}

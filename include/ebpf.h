@@ -48,9 +48,14 @@ struct ebpf_inst {
 #define BPF_DIV   0x30
 #define BPF_OR    0x40
 #define BPF_AND   0x50
+#define BPF_LSH   0x60
+#define BPF_RSH   0x70
 #define BPF_NEG   0x80
+#define BPF_MOD   0x90
 #define BPF_XOR   0xa0
 #define BPF_MOV   0xb0
+#define BPF_ARSH  0xc0
+#define BPF_END   0xd0
 
 // Jump Operations (JMP)
 #define BPF_JA    0x00  // Unconditional jump (Jump Always)
