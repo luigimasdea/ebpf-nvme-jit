@@ -27,12 +27,6 @@ run: $(TARGET)
 debug: $(TARGET)
 	$(QEMU) -machine virt -bios none -kernel $(TARGET) -nographic -S -s
 
-# FIXME: Launch QEMU in the background and then GDB automatically
-test: $(TARGET)
-	$(QEMU) -machine virt -bios none -kernel $(TARGET) -nographic -S -s & \
-	sleep 1 && \
-	$(GDB) -batch $(TARGET)
-
 # Clean compiled files
 clean:
 	rm -f $(TARGET)
