@@ -196,5 +196,64 @@ if __name__ == "__main__":
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 3)
 
+    # Test 10: Bitwise AND, OR, XOR
+    runner.add_test("ALU64_BITWISE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0xF0},
+        {"op": BPF_ALU64 | BPF_AND | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0x33}, # 0xF0 & 0x33 = 0x30
+        {"op": BPF_ALU64 | BPF_OR  | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0x0C}, # 0x30 | 0x0C = 0x3C
+        {"op": BPF_ALU64 | BPF_XOR | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0xFF}, # 0x3C ^ 0xFF = 0xC3
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0xC3)
+
+    # Test 11: Large Immediate (>12 bits)
+    runner.add_test("ALU64_LARGE_IMM", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0x12345678},
+        {"op": BPF_ALU64 | BPF_ADD | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0x12345679)
+
+    # Test 12: JMP_JNE (True)
+    runner.add_test("JMP_JNE_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},
+        {"op": BPF_JMP | BPF_JNE | BPF_K, "dst": 0, "src": 0, "off": 1, "imm": 2},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 3},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 1)
+
+    # Test 13: JMP_JGE (Unsigned)
+    runner.add_test("JMP_JGE_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 10},
+        {"op": BPF_JMP | BPF_JGE | BPF_K, "dst": 0, "src": 0, "off": 1, "imm": 5},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 10)
+
+    # Test 14: JMP_JSGT (Signed comparison)
+    runner.add_test("JMP_JSGT_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": -1},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 2, "src": 0, "off": 0, "imm": -5},
+        {"op": BPF_JMP | BPF_JSGT | BPF_X, "dst": 1, "src": 2, "off": 1, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 42},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 42)
+
+    # Test 15: Backward Jump (Loop-like)
+    runner.add_test("JMP_BACKWARD", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 5},    # R1 = 5
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},    # R0 = 0
+        {"op": BPF_ALU64 | BPF_ADD | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},    # R0 += 1 (Target)
+        {"op": BPF_ALU64 | BPF_SUB | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 1},    # R1 -= 1
+        {"op": BPF_JMP | BPF_JGT | BPF_K, "dst": 1, "src": 0, "off": -3, "imm": 0},   # if R1 > 0 goto Target
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},          # exit
+    ], 5)
+
+    # Test 16: ALU32 truncation
+    runner.add_test("ALU32_ADD_K", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": -1},   # R0 = 0xFFFFFFFFFFFFFFFF
+        {"op": BPF_ALU   | BPF_ADD | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},    # R0 = (u32)R0 + 1 = 0
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0)
+
     success = runner.run_all()
     sys.exit(0 if success else 1)
