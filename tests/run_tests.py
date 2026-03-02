@@ -28,6 +28,20 @@ BPF_MOV   = 0xb0
 BPF_ARSH  = 0xc0
 BPF_EXIT  = 0x90
 
+# Jump Opcodes
+BPF_JA    = 0x00
+BPF_JEQ   = 0x10
+BPF_JGT   = 0x20
+BPF_JGE   = 0x30
+BPF_JSET  = 0x40
+BPF_JNE   = 0x50
+BPF_JSGT  = 0x60
+BPF_JSGE  = 0x70
+BPF_JLT   = 0xa0
+BPF_JLE   = 0xb0
+BPF_JSLT  = 0xc0
+BPF_JSLE  = 0xd0
+
 class TestRunner:
     def __init__(self):
         self.tests = []
@@ -143,6 +157,44 @@ if __name__ == "__main__":
         {"op": BPF_ALU64 | BPF_SUB | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 40},
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 60)
+
+    # Test 6: Simple Jump Always
+    runner.add_test("JMP_JA", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},
+        {"op": BPF_JMP | BPF_JA, "dst": 0, "src": 0, "off": 1, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 2},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 1)
+
+    # Test 7: Jump Equal (True)
+    runner.add_test("JMP_JEQ_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 10},    # 0: R1 = 10
+        {"op": BPF_JMP | BPF_JEQ | BPF_K, "dst": 1, "src": 0, "off": 2, "imm": 10},   # 1: if R1 == 10 goto 4
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 2},    # 2: R0 = 2
+        {"op": BPF_JMP | BPF_JA, "dst": 0, "src": 0, "off": 1, "imm": 0},            # 3: goto 5
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},    # 4: R0 = 1
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},          # 5: exit
+    ], 1)
+
+    # Test 8: Jump Equal (False)
+    runner.add_test("JMP_JEQ_K_FALSE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 10},    # 0: R1 = 10
+        {"op": BPF_JMP | BPF_JEQ | BPF_K, "dst": 1, "src": 0, "off": 2, "imm": 20},   # 1: if R1 == 20 goto 4
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 2},    # 2: R0 = 2
+        {"op": BPF_JMP | BPF_JA, "dst": 0, "src": 0, "off": 1, "imm": 0},            # 3: goto 5
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},    # 4: R0 = 1
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},          # 5: exit
+    ], 2)
+
+    # Test 9: Register comparison (JGT)
+    runner.add_test("JMP_JGT_X_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 20},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 2, "src": 0, "off": 0, "imm": 10},
+        {"op": BPF_JMP | BPF_JGT | BPF_X, "dst": 1, "src": 2, "off": 1, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 2},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 3},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 3)
 
     success = runner.run_all()
     sys.exit(0 if success else 1)

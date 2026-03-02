@@ -61,7 +61,17 @@ struct ebpf_inst {
 #define BPF_JA    0x00  // Unconditional jump (Jump Always)
 #define BPF_JEQ   0x10  // Jump if equal (==)
 #define BPF_JGT   0x20  // Jump if greater (>)
-#define BPF_EXIT  0x90  // Terminate the program and return R0 
+#define BPF_JGE   0x30  // Jump if greater or equal (>=)
+#define BPF_JSET  0x40  // Jump if bit set (dst & src)
+#define BPF_JNE   0x50  // Jump if not equal (!=)
+#define BPF_JSGT  0x60  // Jump if signed greater (>)
+#define BPF_JSGE  0x70  // Jump if signed greater or equal (>=)
+#define BPF_CALL  0x80  // Function call
+#define BPF_EXIT  0x90  // Terminate the program and return R0
+#define BPF_JLT   0xa0  // Jump if less (<)
+#define BPF_JLE   0xb0  // Jump if less or equal (<=)
+#define BPF_JSLT  0xc0  // Jump if signed less (<)
+#define BPF_JSLE  0xd0  // Jump if signed less or equal (<=)
 
 /* =========================================================================
  * SPECIAL INSTRUCTIONS

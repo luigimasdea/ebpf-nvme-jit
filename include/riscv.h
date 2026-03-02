@@ -38,21 +38,29 @@
  * ========================================================================= */
 
 // OPCODES
-#define RV_OP_IMM   0x13  // Opcode for ALU operations with Immediate (e.g., ADDI)
-#define RV_OP_ALU   0x33  // Opcode for ALU operations between Registers (e.g., ADD)
-#define RV_OP_IMM_32 0x1B // Opcode for ALU32 operations with Immediate (RV64)
-#define RV_OP_ALU_32 0x3B // Opcode for ALU32 operations between Registers (RV64)
-#define RV_OP_LUI   0x37  // Opcode for Load Upper Immediate
+#define RV_OP_IMM     0x13  // Opcode for ALU operations with Immediate (e.g., ADDI)
+#define RV_OP_ALU     0x33  // Opcode for ALU operations between Registers (e.g., ADD)
+#define RV_OP_IMM_32  0x1B  // Opcode for ALU32 operations with Immediate (RV64)
+#define RV_OP_ALU_32  0x3B  // Opcode for ALU32 operations between Registers (RV64)
+#define RV_OP_LUI     0x37  // Opcode for Load Upper Immediate
+#define RV_OP_BRANCH  0x63  // Opcode for Branch instructions (e.g., BEQ)
+#define RV_OP_JAL     0x6F  // Opcode for Jump and Link
 
 // FUNCT3
 #define RV_F3_ADD   0x0
+#define RV_F3_BEQ   0x0
+#define RV_F3_BNE   0x1
 #define RV_F3_MUL   0x0   // Funct3 for MUL (M-extension)
 #define RV_F3_SLL   0x1
 #define RV_F3_SLT   0x2
+#define RV_F3_BLT   0x4
 #define RV_F3_SLTU  0x3
+#define RV_F3_BGE   0x5
 #define RV_F3_XOR   0x4
+#define RV_F3_BLTU  0x6
 #define RV_F3_DIV   0x4   // Funct3 for DIV (M-extension)
 #define RV_F3_SRL   0x5
+#define RV_F3_BGEU  0x7
 #define RV_F3_DIVU  0x5   // Funct3 for DIVU (M-extension)
 #define RV_F3_OR    0x6
 #define RV_F3_REM   0x6   // Funct3 for REM (M-extension)
@@ -86,6 +94,21 @@
 // Format: [20 bit: imm] [5 bit: rd] [7 bit: opcode]
 #define RV_MAKE_U(opcode, rd, imm) \
     (uint32_t)( ((imm & 0xFFFFF) << 12) | ((rd & 0x1F) << 7) | (opcode & 0x7F) )
+
+// Generates a B-Type instruction (e.g., BEQ rs1, rs2, imm)
+// Format: [imm[12]] [imm[10:5]] [rs2] [rs1] [funct3] [imm[4:1]] [imm[11]] [opcode]
+#define RV_MAKE_B(opcode, funct3, rs1, rs2, imm) \
+    (uint32_t)( (((uint32_t)(imm) & 0x1000) << 19) | (((uint32_t)(imm) & 0x7E0) << 20) | \
+                (((uint32_t)(rs2) & 0x1F) << 20) | (((uint32_t)(rs1) & 0x1F) << 15) | \
+                (((uint32_t)(funct3) & 0x7) << 12) | (((uint32_t)(imm) & 0x1E) << 7) | \
+                (((uint32_t)(imm) & 0x800) >> 4) | ((uint32_t)(opcode) & 0x7F) )
+
+// Generates a J-Type instruction (e.g., JAL rd, imm)
+// Format: [imm[20]] [imm[10:1]] [imm[11]] [imm[19:12]] [rd] [opcode]
+#define RV_MAKE_J(opcode, rd, imm) \
+    (uint32_t)( (((uint32_t)(imm) & 0x100000) << 11) | (((uint32_t)(imm) & 0x7FE) << 20) | \
+                (((uint32_t)(imm) & 0x800) << 9) | (((uint32_t)(imm) & 0xFF000) << 0) | \
+                (((uint32_t)(rd) & 0x1F) << 7) | ((uint32_t)(opcode) & 0x7F) )
 
 // Fixed pre-calculated instructions
 #define RV_INST_RET 0x00008067 // jalr zero, 0(ra)
