@@ -255,5 +255,32 @@ if __name__ == "__main__":
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 0)
 
+    # Test 17: JMP_JSET (True)
+    runner.add_test("JMP_JSET_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 0x5},
+        {"op": BPF_JMP | BPF_JSET | BPF_K, "dst": 1, "src": 0, "off": 1, "imm": 0x1},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 42},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 42)
+
+    # Test 18: JMP_JLT (Unsigned)
+    runner.add_test("JMP_JLT_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 5},
+        {"op": BPF_JMP | BPF_JLT | BPF_K, "dst": 1, "src": 0, "off": 1, "imm": 10},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 1)
+
+    # Test 19: JMP_JSLT (Signed)
+    runner.add_test("JMP_JSLT_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": -10},
+        {"op": BPF_JMP | BPF_JSLT | BPF_K, "dst": 1, "src": 0, "off": 1, "imm": -5},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 1)
+
     success = runner.run_all()
     sys.exit(0 if success else 1)
