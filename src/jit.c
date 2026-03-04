@@ -107,6 +107,7 @@ static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
   uint8_t op = inst.opcode;
   uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
   uint8_t rs = (inst.src_reg <= 10) ? bpf2rv[inst.src_reg] : RV_REG_ZERO;
+  bool is_jmp32 = (BPF_CLASS(op) == BPF_JMP32);
 
   if (BPF_OP(op) == BPF_JA) {
     int32_t rv_off = 0;
@@ -123,39 +124,58 @@ static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
     rs = RV_REG_T0;
   }
 
+  uint8_t cmp_rd = rd;
+  uint8_t cmp_rs = rs;
+
+  // For 32-bit jumps, we must truncate the 64-bit registers to 32-bit
+  if (is_jmp32) {
+    bool is_signed = (BPF_OP(op) == BPF_JSGT || BPF_OP(op) == BPF_JSGE ||
+                      BPF_OP(op) == BPF_JSLT || BPF_OP(op) == BPF_JSLE);
+
+    if (is_signed) {
+      // Sign-extend 32-bit to 64-bit (ADDIW T1, rd, 0)
+      emit_rv32(RV_MAKE_I(RV_OP_IMM_32, RV_REG_T1, RV_F3_ADD, rd, 0));
+      emit_rv32(RV_MAKE_I(RV_OP_IMM_32, RV_REG_T2, RV_F3_ADD, rs, 0));
+    } else {
+      // Zero-extend 32-bit to 64-bit (SLLI + SRLI)
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, rd, 32));
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, RV_REG_T1, 32));
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T2, RV_F3_SLL, rs, 32));
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T2, RV_F3_SRL, RV_REG_T2, 32));
+    }
+    cmp_rd = RV_REG_T1;
+    cmp_rs = RV_REG_T2;
+  }
+
   int32_t rv_off = 0;
   if (current_pass == PASS_EMIT) {
     rv_off = (insn_offsets[target_idx] - pc_riscv) * 4;
   }
 
-  // Handle different jump types
+  // Handle different jump types using prepared registers
   switch (BPF_OP(op)) {
-    case BPF_JEQ:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BEQ, rd, rs, rv_off)); break;
-    case BPF_JNE:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BNE, rd, rs, rv_off)); break;
-    case BPF_JGT:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLTU, rs, rd, rv_off)); break;
-    case BPF_JGE:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGEU, rd, rs, rv_off)); break;
-    case BPF_JLT:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLTU, rd, rs, rv_off)); break;
-    case BPF_JLE:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGEU, rs, rd, rv_off)); break;
-    case BPF_JSGT: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLT, rs, rd, rv_off)); break;
-    case BPF_JSGE: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGE, rd, rs, rv_off)); break;
-    case BPF_JSLT: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLT, rd, rs, rv_off)); break;
-    case BPF_JSLE: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGE, rs, rd, rv_off)); break;
+    case BPF_JEQ:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BEQ, cmp_rd, cmp_rs, rv_off)); break;
+    case BPF_JNE:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BNE, cmp_rd, cmp_rs, rv_off)); break;
+    case BPF_JGT:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLTU, cmp_rs, cmp_rd, rv_off)); break;
+    case BPF_JGE:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGEU, cmp_rd, cmp_rs, rv_off)); break;
+    case BPF_JLT:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLTU, cmp_rd, cmp_rs, rv_off)); break;
+    case BPF_JLE:  emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGEU, cmp_rs, cmp_rd, rv_off)); break;
+    case BPF_JSGT: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLT, cmp_rs, cmp_rd, rv_off)); break;
+    case BPF_JSGE: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGE, cmp_rd, cmp_rs, rv_off)); break;
+    case BPF_JSLT: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BLT, cmp_rd, cmp_rs, rv_off)); break;
+    case BPF_JSLE: emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BGE, cmp_rs, cmp_rd, rv_off)); break;
     case BPF_JSET:
-      emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T1, RV_F3_AND, rd, rs, RV_F7_ADD));
+      emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T1, RV_F3_AND, cmp_rd, cmp_rs, RV_F7_ADD));
       if (current_pass == PASS_EMIT) {
         rv_off = (insn_offsets[target_idx] - pc_riscv) * 4;
       }
       emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BNE, RV_REG_T1, RV_REG_ZERO, rv_off));
       break;
     case BPF_CALL:
-      // Placeholder: for now we don't have helper functions.
-      // In a real JIT, we would load the address of helper_table[inst.imm]
-      // and use jalr. For now, we emit a NOP or a call to a dummy.
-      emit_rv32(0x00000013); // nop (addi x0, x0, 0)
+      emit_rv32(0x00000013); // nop
       break;
   }
-  }
-
+}
 
 static void emit_alu_op(struct ebpf_inst inst) {
   uint8_t op = inst.opcode;
@@ -207,6 +227,7 @@ static void generate_insn(struct ebpf_inst inst, int i) {
       emit_alu_op(inst);
       break;
     case BPF_JMP:
+    case BPF_JMP32:
       if (BPF_OP(op) == BPF_EXIT) {
         emit_rv32(RV_INST_RET);
       } else {

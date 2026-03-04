@@ -5,10 +5,12 @@ import sys
 import time
 
 # eBPF Constants (Mirroring include/ebpf.h)
-BPF_LD    = 0x00
+BPF_STX   = 0x03
 BPF_ALU   = 0x04
 BPF_JMP   = 0x05
+BPF_JMP32 = 0x06
 BPF_ALU64 = 0x07
+
 
 BPF_K     = 0x00
 BPF_X     = 0x08
@@ -281,6 +283,17 @@ if __name__ == "__main__":
         {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 1)
+
+    # Test 20: JMP32_JEQ (True, ignoring upper 32 bits)
+    runner.add_test("JMP32_JEQ_K_TRUE", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 0x1}, # Load 1
+        # Shift left by 32 to put 1 in upper bits, keeping 0 in lower 32
+        {"op": BPF_ALU64 | BPF_LSH | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 32},  # R1 = 0x100000000
+        {"op": BPF_JMP32 | BPF_JEQ | BPF_K, "dst": 1, "src": 0, "off": 1, "imm": 0},   # if (u32)R1 == 0 goto 4
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 42},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 42)
 
     success = runner.run_all()
     sys.exit(0 if success else 1)
