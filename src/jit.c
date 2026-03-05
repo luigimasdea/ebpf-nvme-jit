@@ -236,6 +236,33 @@ static void emit_st(struct ebpf_inst inst) {
   emit_rv32(RV_MAKE_S(RV_OP_STORE, f3, rd, RV_REG_T0, inst.offset));
 }
 
+static void emit_atomic(struct ebpf_inst inst) {
+  uint8_t op = inst.opcode;
+  uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
+  uint8_t rs = (inst.src_reg <= 10) ? bpf2rv[inst.src_reg] : RV_REG_ZERO;
+  uint8_t f3 = (BPF_SIZE(op) == BPF_DW) ? RV_F3_AMO_D : RV_F3_AMO_W;
+  uint8_t f7_op;
+  bool fetch = (inst.imm & BPF_FETCH);
+
+  switch (inst.imm & 0xF0) {
+    case BPF_ADD: f7_op = RV_F7_AMOADD; break;
+    case BPF_AND: f7_op = RV_F7_AMOAND; break;
+    case BPF_OR:  f7_op = RV_F7_AMOOR;  break;
+    case BPF_XOR: f7_op = RV_F7_AMOXOR; break;
+    default: return; // Unsupported atomic op
+  }
+
+  uint8_t addr_reg = rd;
+  if (inst.offset != 0) {
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_ADD, rd, inst.offset));
+    addr_reg = RV_REG_T0;
+  }
+
+  // If fetch is set, rd (dest for old value) is rs. Otherwise ZERO.
+  uint8_t fetch_rd = fetch ? rs : RV_REG_ZERO;
+  emit_rv32(RV_MAKE_AMO(fetch_rd, addr_reg, rs, f3, f7_op));
+}
+
 static void emit_alu_op(struct ebpf_inst inst) {
   uint8_t op = inst.opcode;
   uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
@@ -327,7 +354,11 @@ static void generate_insn(struct ebpf_inst inst, int i) {
       emit_ldx(inst);
       break;
     case BPF_STX:
-      emit_stx(inst);
+      if (BPF_MODE(op) == BPF_ATOMIC) {
+        emit_atomic(inst);
+      } else {
+        emit_stx(inst);
+      }
       break;
     case BPF_ST:
       emit_st(inst);

@@ -45,12 +45,15 @@
 #define RV_OP_LUI     0x37  // Opcode for Load Upper Immediate
 #define RV_OP_LOAD    0x03  // Opcode for Load instructions (e.g., LD)
 #define RV_OP_STORE   0x23  // Opcode for Store instructions (e.g., SD)
+#define RV_OP_AMO     0x2F  // Opcode for Atomic instructions (e.g., AMOADD)
 #define RV_OP_BRANCH  0x63  // Opcode for Branch instructions (e.g., BEQ)
 #define RV_OP_JAL     0x6F  // Opcode for Jump and Link
 #define RV_OP_JALR    0x67  // Opcode for Jump and Link Register (e.g., JALR)
 
 // FUNCT3
 #define RV_F3_ADD   0x0
+#define RV_F3_AMO_W 0x2   // AMO Word (32-bit)
+#define RV_F3_AMO_D 0x3   // AMO Double (64-bit)
 #define RV_F3_LB    0x0   // Load Byte
 #define RV_F3_LH    0x1   // Load Half
 #define RV_F3_LW    0x2   // Load Word
@@ -81,6 +84,15 @@
 #define RV_F3_AND   0x7
 #define RV_F3_REMU  0x7   // Funct3 for REMU (M-extension)
 
+// FUNCT7 (AMO Operation codes)
+#define RV_F7_AMOADD  0x00
+#define RV_F7_AMOSWAP 0x01
+#define RV_F7_AMOXOR  0x04
+#define RV_F7_AMOOR   0x08
+#define RV_F7_AMOAND  0x0C
+#define RV_F7_AMOMIN  0x10
+#define RV_F7_AMOMAX  0x14
+
 // FUNCT7
 #define RV_F7_ADD   0x00
 #define RV_F7_MUL   0x01  // Funct7 for M-extension (MUL, DIV, REM)
@@ -91,6 +103,12 @@
 /* =========================================================================
  * INSTRUCTION CONSTRUCTORS (Machine Code Generation)
  * ========================================================================= */
+
+// Generates an AMO instruction (e.g., AMOADD.W rd, rs2, (rs1))
+// Format: [7 bit: funct7] [5 bit: rs2] [5 bit: rs1] [3 bit: funct3] [5 bit: rd] [7 bit: opcode]
+// The funct7 for AMOs includes the amoop(5) and aq(1) and rl(1).
+#define RV_MAKE_AMO(rd, rs1, rs2, f3, f7_op) \
+    RV_MAKE_R(RV_OP_AMO, rd, f3, rs1, rs2, (f7_op << 2))
 
 // Generates an I-type instruction (e.g., ADDI rd, rs1, imm)
 // Format: [12 bit: imm] [5 bit: rs1] [3 bit: funct3] [5 bit: rd] [7 bit: opcode]

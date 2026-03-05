@@ -55,6 +55,11 @@ struct ebpf_inst {
 #define BPF_MEM   0x60
 #define BPF_LEN   0x80
 #define BPF_MSH   0xa0
+#define BPF_ATOMIC 0xc0
+
+// Atomic operations (embedded in the 'imm' field)
+#define BPF_FETCH 0x01
+// Reuse BPF_ADD, BPF_OR, BPF_AND, BPF_XOR (0x00, 0x40, 0x50, 0xa0)
 
 // 5. OPERATION EXTRACTION (High 4 bits: mask 0xf0) - For ALU and JMP
 #define BPF_OP(code)    ((code) & 0xf0)

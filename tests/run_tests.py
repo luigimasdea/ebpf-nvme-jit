@@ -28,6 +28,10 @@ BPF_IMM   = 0x00
 BPF_ABS   = 0x20
 BPF_IND   = 0x40
 BPF_MEM   = 0x60
+BPF_ATOMIC = 0xc0
+
+# Atomic ops
+BPF_FETCH = 0x01
 
 BPF_ADD   = 0x00
 BPF_SUB   = 0x10
@@ -341,6 +345,16 @@ if __name__ == "__main__":
         {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1234}, # R0 = 1234
         {"op": BPF_JMP | BPF_EXIT,         "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 1234)
+
+    # Test 27: Atomic ADD
+    runner.add_test("MEM_ATOMIC_ADD", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 10},
+        {"op": BPF_STX | BPF_DW | BPF_MEM,  "dst": 10, "src": 1, "off": -8, "imm": 0},    # *(u64*)(R10 - 8) = 10
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 2, "src": 0, "off": 0, "imm": 5},
+        {"op": BPF_STX | BPF_DW | BPF_ATOMIC, "dst": 10, "src": 2, "off": -8, "imm": BPF_ADD}, # *(u64*)(R10 - 8) += 5
+        {"op": BPF_LDX | BPF_DW | BPF_MEM,  "dst": 0, "src": 10, "off": -8, "imm": 0},    # R0 = *(u64*)(R10 - 8)
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 15)
 
     # Bug Reproduction: BPF_JMP32 | BPF_JA should NOT act as an unconditional jump anymore
     # Because we fixed it to only work for BPF_JMP class.
