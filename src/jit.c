@@ -102,6 +102,15 @@ static void emit_alu(struct ebpf_inst inst, uint8_t rd, uint8_t rs, uint8_t f3, 
   }
 }
 
+static void* bpf_helper_lookup(int32_t imm) {
+  switch (imm) {
+    case 1: return (void*)uart_print;
+    case 2: return (void*)uart_print_int;
+    case 3: return (void*)uart_print_hex;
+    default: return (void*)0;
+  }
+}
+
 static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
   uint8_t op = inst.opcode;
   uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
@@ -114,6 +123,15 @@ static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
       rv_off = (insn_offsets[target_idx] - pc_riscv) * 4;
     }
     emit_rv32(RV_MAKE_J(RV_OP_JAL, RV_REG_ZERO, rv_off));
+    return;
+  }
+
+  if (BPF_OP(op) == BPF_CALL) {
+    void* func_addr = bpf_helper_lookup(inst.imm);
+    if (func_addr) {
+      emit_load_imm(RV_REG_T0, (uintptr_t)func_addr);
+      emit_rv32(RV_MAKE_I(RV_OP_JALR, RV_REG_RA, 0, RV_REG_T0, 0));
+    }
     return;
   }
 
@@ -169,9 +187,6 @@ static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
         rv_off = (insn_offsets[target_idx] - pc_riscv) * 4;
       }
       emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BNE, RV_REG_T1, RV_REG_ZERO, rv_off));
-      break;
-    case BPF_CALL:
-      emit_rv32(0x00000013); // nop
       break;
   }
 }

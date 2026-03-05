@@ -47,6 +47,7 @@
 #define RV_OP_STORE   0x23  // Opcode for Store instructions (e.g., SD)
 #define RV_OP_BRANCH  0x63  // Opcode for Branch instructions (e.g., BEQ)
 #define RV_OP_JAL     0x6F  // Opcode for Jump and Link
+#define RV_OP_JALR    0x67  // Opcode for Jump and Link Register (e.g., JALR)
 
 // FUNCT3
 #define RV_F3_ADD   0x0
