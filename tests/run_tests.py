@@ -53,6 +53,7 @@ BPF_JSET  = 0x40
 BPF_JNE   = 0x50
 BPF_JSGT  = 0x60
 BPF_JSGE  = 0x70
+BPF_CALL  = 0x80
 BPF_JLT   = 0xa0
 BPF_JLE   = 0xb0
 BPF_JSLT  = 0xc0
@@ -332,6 +333,14 @@ if __name__ == "__main__":
         {"op": BPF_ALU64 | BPF_ADD | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 10},  # R0 += 10
         {"op": BPF_JMP | BPF_EXIT,         "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 110)
+
+    # Test 26: BPF_CALL (uart_print_int)
+    runner.add_test("JMP_CALL_UART_PRINT_INT", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 1234},
+        {"op": BPF_JMP | BPF_CALL,         "dst": 0, "src": 0, "off": 0, "imm": 2},    # call uart_print_int
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1234}, # R0 = 1234
+        {"op": BPF_JMP | BPF_EXIT,         "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 1234)
 
     # Bug Reproduction: BPF_JMP32 | BPF_JA should NOT act as an unconditional jump anymore
     # Because we fixed it to only work for BPF_JMP class.

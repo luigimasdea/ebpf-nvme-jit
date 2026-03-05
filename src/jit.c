@@ -102,14 +102,7 @@ static void emit_alu(struct ebpf_inst inst, uint8_t rd, uint8_t rs, uint8_t f3, 
   }
 }
 
-static void* bpf_helper_lookup(int32_t imm) {
-  switch (imm) {
-    case 1: return (void*)uart_print;
-    case 2: return (void*)uart_print_int;
-    case 3: return (void*)uart_print_hex;
-    default: return (void*)0;
-  }
-}
+extern void* bpf_helper_lookup(int32_t imm);
 
 static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
   uint8_t op = inst.opcode;

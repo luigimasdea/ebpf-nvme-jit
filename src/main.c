@@ -2,6 +2,16 @@
 #include "jit.h"
 #include "utils.h"
 
+// eBPF Helper Lookup Table
+void* bpf_helper_lookup(int32_t imm) {
+    switch (imm) {
+        case 1: return (void*)uart_print;
+        case 2: return (void*)uart_print_int;
+        case 3: return (void*)uart_print_hex;
+        default: return (void*)0;
+    }
+}
+
 #ifdef TEST_RUNNER
 #include "test_case.h"
 #else
