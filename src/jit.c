@@ -280,8 +280,12 @@ static void emit_prologue() {
   emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S2, 544));
   emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S3, 536));
   emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S4, 528));
+  
   // Set R10 (s0) to the top of the eBPF stack (sp + 512)
   emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_FP, RV_F3_ADD, RV_REG_SP, 512));
+
+  // Move context from a0 (C first argument) to a1 (eBPF R1)
+  emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_A1, RV_F3_ADD, RV_REG_A0, 0));
 }
 
 static void emit_epilogue() {
@@ -349,7 +353,7 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
   }
 }
 
-int run_jit_filter(struct ebpf_inst *prog, int num_instructions) {
+int run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx) {
   compile_ebpf(prog, num_instructions);
 
   uart_print("[DEBUG] JIT Memory Dump:\n");
@@ -362,6 +366,6 @@ int run_jit_filter(struct ebpf_inst *prog, int num_instructions) {
   }
 
   asm volatile("fence.i");
-  int (*filter)() = (int (*)())jit_memory;
-  return filter();
+  int (*filter)(void *ctx) = (int (*)(void *))jit_memory;
+  return filter(ctx);
 }

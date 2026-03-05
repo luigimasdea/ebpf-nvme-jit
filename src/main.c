@@ -6,16 +6,15 @@
 #include "test_case.h"
 #else
 struct ebpf_inst test_prog[] = {
-    // Instr 0: R0 = 10
-    { BPF_ALU64 | BPF_MOV | BPF_K, 0, 0, 0, 10 },
+    // Context (R1) points to a memory location.
+    // Let's load a 64-bit value from R1 (ctx) into R0.
+    // R0 = *(u64 *)R1
+    { BPF_LDX | BPF_DW | BPF_MEM, 0, 1, 0, 0 },
     
-    // Instr 1: R0 = R0 << 2 (10 << 2 = 40)
-    { BPF_ALU64 | BPF_LSH | BPF_K, 0, 0, 0, 2 },
+    // R0 = R0 + 5
+    { BPF_ALU64 | BPF_ADD | BPF_K, 0, 0, 0, 5 },
     
-    // Instr 2: R0 = R0 % 7 (40 % 7 = 5)
-    { BPF_ALU64 | BPF_MOD | BPF_K, 0, 0, 0, 7 },
-    
-    // Instr 3: EXIT (Returns R0, expecting 5)
+    // EXIT (Returns R0)
     { BPF_JMP | BPF_EXIT, 0, 0, 0, 0 }
 };
 #endif
@@ -27,8 +26,11 @@ int main() {
 
     uart_print("[NVMe JIT] Compiling eBPF bytecode to RISC-V...\n");
 
+    // DATA FOR CONTEXT
+    uint64_t ctx_data = 100;
+    
     // RUN THE JIT COMPILER
-    int result = run_jit_filter(test_prog, num_inst);
+    int result = run_jit_filter(test_prog, num_inst, &ctx_data);
 
     // PRINT THE RESULT
     uart_print("\n>>> JIT EXECUTION RESULT: ");

@@ -16,8 +16,9 @@ void compile_ebpf(struct ebpf_inst *prog, int len);
  * Compiles and executes an eBPF program, returning its exit value (R0).
  * @param prog Pointer to the array of eBPF instructions.
  * @param num_instructions Number of instructions in the program.
+ * @param ctx Context pointer passed as the first argument (R1).
  * @return The value of register R0 after execution.
  */
-int run_jit_filter(struct ebpf_inst *prog, int num_instructions);
+int run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx);
 
 #endif // JIT_H

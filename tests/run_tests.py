@@ -325,6 +325,14 @@ if __name__ == "__main__":
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 0xABCDE)
 
+    # Test 25: Context Parameter (R1)
+    # The runner in main.c passes &ctx_data (where ctx_data = 100)
+    runner.add_test("CTX_LOAD_R1", [
+        {"op": BPF_LDX | BPF_DW | BPF_MEM, "dst": 0, "src": 1, "off": 0, "imm": 0},    # R0 = *(u64*)R1
+        {"op": BPF_ALU64 | BPF_ADD | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 10},  # R0 += 10
+        {"op": BPF_JMP | BPF_EXIT,         "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 110)
+
     # Bug Reproduction: BPF_JMP32 | BPF_JA should NOT act as an unconditional jump anymore
     # Because we fixed it to only work for BPF_JMP class.
     # So BPF_JMP32 | BPF_JA should now fall through to emit_jmp,
