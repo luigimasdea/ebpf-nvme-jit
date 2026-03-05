@@ -356,6 +356,13 @@ if __name__ == "__main__":
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 15)
 
+    # Test 28: LD_IMM64 (16-byte instruction)
+    runner.add_test("LD_IMM64", [
+        {"op": BPF_LD | BPF_DW | BPF_IMM, "dst": 0, "src": 0, "off": 0, "imm": 0x12345678},
+        {"op": 0,                         "dst": 0, "src": 0, "off": 0, "imm": 0xDEADBEEF},
+        {"op": BPF_JMP | BPF_EXIT,         "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0xDEADBEEF12345678)
+
     # Bug Reproduction: BPF_JMP32 | BPF_JA should NOT act as an unconditional jump anymore
     # Because we fixed it to only work for BPF_JMP class.
     # So BPF_JMP32 | BPF_JA should now fall through to emit_jmp,

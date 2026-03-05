@@ -19,6 +19,6 @@ void compile_ebpf(struct ebpf_inst *prog, int len);
  * @param ctx Context pointer passed as the first argument (R1).
  * @return The value of register R0 after execution.
  */
-int run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx);
+uint64_t run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx);
 
 #endif // JIT_H

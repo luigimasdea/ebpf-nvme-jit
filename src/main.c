@@ -40,11 +40,11 @@ int main() {
     uint64_t ctx_data = 100;
     
     // RUN THE JIT COMPILER
-    int result = run_jit_filter(test_prog, num_inst, &ctx_data);
+    uint64_t result = (uint64_t)(uintptr_t)run_jit_filter(test_prog, num_inst, &ctx_data);
 
     // PRINT THE RESULT
     uart_print("\n>>> JIT EXECUTION RESULT: ");
-    uart_print_int(result);
+    uart_print_uint64(result);
     uart_print(" <<<\n\n");
 
     // CLEAN SHUTDOWN
