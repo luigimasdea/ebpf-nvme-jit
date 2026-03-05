@@ -431,5 +431,20 @@ if __name__ == "__main__":
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 43) # Now expecting 43 because EXIT should be ignored for JMP32
 
+    # Test 34: BPF_DIV by zero (ALU64)
+    runner.add_test("ALU64_DIV_ZERO", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 100},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_ALU64 | BPF_DIV | BPF_X, "dst": 0, "src": 1, "off": 0, "imm": 0},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0)
+
+    # Test 35: BPF_DIV by zero (ALU32)
+    runner.add_test("ALU32_DIV_ZERO", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 100},
+        {"op": BPF_ALU | BPF_DIV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0)
+
     success = runner.run_all()
     sys.exit(0 if success else 1)

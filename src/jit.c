@@ -77,13 +77,27 @@ static void emit_alu(struct ebpf_inst inst, uint8_t rd, uint8_t rs, uint8_t f3, 
 
   // 2. Clear, Linear Hardware Pathing
   if (!use_imm) {
-    // Path A: Standard Register-to-Register (or large constant in T0)
-    emit_rv32(RV_MAKE_R(op_alu, rd, f3, rd, rs, f7));
+    if (f3 == RV_F3_DIVU && f7 == RV_F7_MUL) {
+      // eBPF DIV by zero returns 0. RISC-V returns -1.
+      // BEQ rs, ZERO, 12 (to ADDI rd, ZERO, 0)
+      emit_rv32(RV_MAKE_B(RV_OP_BRANCH, RV_F3_BEQ, rs, RV_REG_ZERO, 12));
+      emit_rv32(RV_MAKE_R(op_alu, rd, f3, rd, rs, f7));
+      // JAL ZERO, 8 (skip the LI 0)
+      emit_rv32(RV_MAKE_J(RV_OP_JAL, RV_REG_ZERO, 8));
+      emit_rv32(RV_MAKE_I(is_alu64 ? RV_OP_IMM : RV_OP_IMM_32, rd, RV_F3_ADD, RV_REG_ZERO, 0));
+    } else {
+      // Path A: Standard Register-to-Register (or large constant in T0)
+      emit_rv32(RV_MAKE_R(op_alu, rd, f3, rd, rs, f7));
+    }
   }
   else if (f7 == RV_F7_MUL) {
     // Path B: RV64M has no immediate instructions. Use T1 workaround.
-    emit_load_imm(RV_REG_T1, inst.imm);
-    emit_rv32(RV_MAKE_R(op_alu, rd, f3, rd, RV_REG_T1, f7));
+    if (inst.imm == 0 && f3 == RV_F3_DIVU) {
+       emit_rv32(RV_MAKE_I(is_alu64 ? RV_OP_IMM : RV_OP_IMM_32, rd, RV_F3_ADD, RV_REG_ZERO, 0));
+    } else {
+       emit_load_imm(RV_REG_T1, inst.imm);
+       emit_rv32(RV_MAKE_R(op_alu, rd, f3, rd, RV_REG_T1, f7));
+    }
   }
   else if (f7 == RV_F7_SUB) {
     // Path C: No SUBI instruction. Add the negative value.
@@ -99,6 +113,13 @@ static void emit_alu(struct ebpf_inst inst, uint8_t rd, uint8_t rs, uint8_t f3, 
   else {
     // Path E: Standard, clean Immediate Math (ADD, AND, OR, XOR)
     emit_rv32(RV_MAKE_I(op_imm, rd, f3, rd, inst.imm & 0xFFF));
+  }
+
+  // 3. eBPF standard: 32-bit ALU operations MUST zero-extend to 64-bit.
+  // RISC-V ALU_32 operations (OP-32) sign-extend the result.
+  if (!is_alu64 && rd != RV_REG_ZERO) {
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SLL, rd, 32));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 32));
   }
 }
 
@@ -370,8 +391,8 @@ static void emit_alu_op(struct ebpf_inst inst) {
   case BPF_OR: emit_alu(inst, rd, rs, RV_F3_OR, RV_F7_ADD); break;
   case BPF_XOR: emit_alu(inst, rd, rs, RV_F3_XOR, RV_F7_ADD); break;
   case BPF_MUL: emit_alu(inst, rd, rs, RV_F3_MUL, RV_F7_MUL); break;
-  case BPF_DIV: emit_alu(inst, rd, rs, RV_F3_DIV, RV_F7_MUL); break;
-  case BPF_MOD: emit_alu(inst, rd, rs, RV_F3_REM, RV_F7_MUL); break;
+  case BPF_DIV: emit_alu(inst, rd, rs, RV_F3_DIVU, RV_F7_MUL); break;
+  case BPF_MOD: emit_alu(inst, rd, rs, RV_F3_REMU, RV_F7_MUL); break;
   case BPF_LSH: emit_alu(inst, rd, rs, RV_F3_SLL, RV_F7_ADD); break;
   case BPF_RSH: emit_alu(inst, rd, rs, RV_F3_SRL, RV_F7_ADD); break;
   case BPF_ARSH: emit_alu(inst, rd, rs, RV_F3_SRL, RV_F7_SRA); break;
