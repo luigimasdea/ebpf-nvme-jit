@@ -46,7 +46,12 @@ BPF_MOD   = 0x90
 BPF_XOR   = 0xa0
 BPF_MOV   = 0xb0
 BPF_ARSH  = 0xc0
+BPF_END   = 0xd0
 BPF_EXIT  = 0x90
+
+# Endianness
+BPF_TO_LE = 0x00
+BPF_TO_BE = 0x08
 
 # Jump Opcodes
 BPF_JA    = 0x00
@@ -362,6 +367,43 @@ if __name__ == "__main__":
         {"op": 0,                         "dst": 0, "src": 0, "off": 0, "imm": 0xDEADBEEF},
         {"op": BPF_JMP | BPF_EXIT,         "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 0xDEADBEEF12345678)
+
+    # Test 29: BPF_END (TO_LE 16-bit)
+    runner.add_test("ALU_END_TO_LE_16", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0x12345678},
+        {"op": BPF_ALU | BPF_END | BPF_TO_LE, "dst": 0, "src": 0, "off": 0, "imm": 16},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0x5678)
+
+    # Test 30: BPF_END (TO_LE 32-bit)
+    runner.add_test("ALU_END_TO_LE_32", [
+        {"op": BPF_LD | BPF_DW | BPF_IMM, "dst": 0, "src": 0, "off": 0, "imm": 0xABCDEF01},
+        {"op": 0,                         "dst": 0, "src": 0, "off": 0, "imm": 0x12345678},
+        {"op": BPF_ALU | BPF_END | BPF_TO_LE, "dst": 0, "src": 0, "off": 0, "imm": 32},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0xABCDEF01)
+
+    # Test 31: BPF_END (TO_BE 16-bit)
+    runner.add_test("ALU_END_TO_BE_16", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0x1234},
+        {"op": BPF_ALU | BPF_END | BPF_TO_BE, "dst": 0, "src": 0, "off": 0, "imm": 16},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0x3412)
+
+    # Test 32: BPF_END (TO_BE 32-bit)
+    runner.add_test("ALU_END_TO_BE_32", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 0x12345678},
+        {"op": BPF_ALU | BPF_END | BPF_TO_BE, "dst": 0, "src": 0, "off": 0, "imm": 32},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0x78563412)
+
+    # Test 33: BPF_END (TO_BE 64-bit)
+    runner.add_test("ALU_END_TO_BE_64", [
+        {"op": BPF_LD | BPF_DW | BPF_IMM, "dst": 0, "src": 0, "off": 0, "imm": 0x11223344},
+        {"op": 0,                         "dst": 0, "src": 0, "off": 0, "imm": 0x55667788},
+        {"op": BPF_ALU | BPF_END | BPF_TO_BE, "dst": 0, "src": 0, "off": 0, "imm": 64},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0x4433221188776655)
 
     # Bug Reproduction: BPF_JMP32 | BPF_JA should NOT act as an unconditional jump anymore
     # Because we fixed it to only work for BPF_JMP class.

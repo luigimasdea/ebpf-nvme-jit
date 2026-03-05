@@ -263,6 +263,100 @@ static void emit_atomic(struct ebpf_inst inst) {
   emit_rv32(RV_MAKE_AMO(fetch_rd, addr_reg, rs, f3, f7_op));
 }
 
+static void emit_endian(struct ebpf_inst inst, uint8_t rd) {
+  uint8_t op = inst.opcode;
+
+  if (BPF_SRC(op) == BPF_TO_LE) {
+    if (inst.imm == 16) {
+      // Truncate to 16 bits
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SLL, rd, 48));
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 48));
+    } else if (inst.imm == 32) {
+      // Truncate to 32 bits
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SLL, rd, 32));
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 32));
+    }
+    return;
+  }
+
+  // BPF_TO_BE
+  if (inst.imm == 16) {
+    // rd = ((rd & 0xff) << 8) | ((rd & 0xff00) >> 8)
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_AND, rd, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_SLL, RV_REG_T0, 8));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 8));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_AND, rd, 0xff));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_OR, rd, RV_REG_T0, RV_F7_ADD));
+  } else if (inst.imm == 32) {
+    // t0 = (rd & 0x000000ff) << 24
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_AND, rd, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_SLL, RV_REG_T0, 24));
+
+    // t1 = (rd & 0x0000ff00) << 8
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 8));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 16));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // t1 = (rd & 0x00ff0000) >> 8
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 16));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 8));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // t1 = (rd & 0xff000000) >> 24
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 24));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+  } else if (inst.imm == 64) {
+    // Byte 0 -> Bit 56
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_AND, rd, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_SLL, RV_REG_T0, 56));
+
+    // Byte 1 -> Bit 48
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 8));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 48));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // Byte 2 -> Bit 40
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 16));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 40));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // Byte 3 -> Bit 32
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 24));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 32));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // Byte 4 -> Bit 24
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 32));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 24));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // Byte 5 -> Bit 16
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 40));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 16));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // Byte 6 -> Bit 8
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 48));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 8));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, RV_REG_T0, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+
+    // Byte 7 -> Bit 0
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SRL, rd, 56));
+    emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_AND, RV_REG_T1, 0xff));
+    emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_OR, RV_REG_T0, RV_REG_T1, RV_F7_ADD));
+  }
+}
+
 static void emit_alu_op(struct ebpf_inst inst) {
   uint8_t op = inst.opcode;
   uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
@@ -297,6 +391,9 @@ static void emit_alu_op(struct ebpf_inst inst) {
     break;
   case BPF_NEG:
     emit_rv32(RV_MAKE_R(is_alu64 ? RV_OP_ALU : RV_OP_ALU_32, rd, RV_F3_ADD, RV_REG_ZERO, rd, RV_F7_SUB));
+    break;
+  case BPF_END:
+    emit_endian(inst, rd);
     break;
   }
 }

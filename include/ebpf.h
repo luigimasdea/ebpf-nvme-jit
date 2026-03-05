@@ -38,6 +38,9 @@ struct ebpf_inst {
 #define BPF_K     0x00  // Source is the "imm" field (constant)
 #define BPF_X     0x08  // Source is the "src_reg" (register)
 
+#define BPF_TO_LE 0x00  // Convert to Little Endian (for BPF_END)
+#define BPF_TO_BE 0x08  // Convert to Big Endian (for BPF_END)
+
 // 3. SIZE EXTRACTION (Bits 3 and 4: mask 0x18) - For LD, LDX, ST, STX
 #define BPF_SIZE(code)  ((code) & 0x18)
 
