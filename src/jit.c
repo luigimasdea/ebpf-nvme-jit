@@ -22,8 +22,7 @@ static const uint8_t bpf2rv[11] = {
 static uint32_t jit_memory[1024] __attribute__((aligned(4)));
 static int pc_riscv = 0;
 
-// Offset Map: Stores the starting RISC-V instruction index for each eBPF
-// instruction
+// Offset Map: Stores the starting RISC-V instruction index for each eBPF instruction
 static uint32_t insn_offsets[256];
 
 typedef enum {
@@ -109,7 +108,7 @@ static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
   uint8_t rs = (inst.src_reg <= 10) ? bpf2rv[inst.src_reg] : RV_REG_ZERO;
   bool is_jmp32 = (BPF_CLASS(op) == BPF_JMP32);
 
-  if (BPF_OP(op) == BPF_JA) {
+  if (!is_jmp32 && BPF_OP(op) == BPF_JA) {
     int32_t rv_off = 0;
     if (current_pass == PASS_EMIT) {
       rv_off = (insn_offsets[target_idx] - pc_riscv) * 4;
@@ -177,6 +176,58 @@ static void emit_jmp(struct ebpf_inst inst, uint32_t target_idx) {
   }
 }
 
+static void emit_ldx(struct ebpf_inst inst) {
+  uint8_t op = inst.opcode;
+  uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
+  uint8_t rs = (inst.src_reg <= 10) ? bpf2rv[inst.src_reg] : RV_REG_ZERO;
+  uint8_t f3;
+
+  switch (BPF_SIZE(op)) {
+    case BPF_B:  f3 = RV_F3_LBU; break;
+    case BPF_H:  f3 = RV_F3_LHU; break;
+    case BPF_W:  f3 = RV_F3_LWU; break;
+    case BPF_DW: f3 = RV_F3_LD; break;
+    default: return;
+  }
+
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, rd, f3, rs, inst.offset));
+}
+
+static void emit_stx(struct ebpf_inst inst) {
+  uint8_t op = inst.opcode;
+  uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
+  uint8_t rs = (inst.src_reg <= 10) ? bpf2rv[inst.src_reg] : RV_REG_ZERO;
+  uint8_t f3;
+
+  switch (BPF_SIZE(op)) {
+    case BPF_B:  f3 = RV_F3_SB; break;
+    case BPF_H:  f3 = RV_F3_SH; break;
+    case BPF_W:  f3 = RV_F3_SW; break;
+    case BPF_DW: f3 = RV_F3_SD; break;
+    default: return;
+  }
+
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, f3, rd, rs, inst.offset));
+}
+
+static void emit_st(struct ebpf_inst inst) {
+  uint8_t op = inst.opcode;
+  uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
+  uint8_t f3;
+
+  switch (BPF_SIZE(op)) {
+    case BPF_B:  f3 = RV_F3_SB; break;
+    case BPF_H:  f3 = RV_F3_SH; break;
+    case BPF_W:  f3 = RV_F3_SW; break;
+    case BPF_DW: f3 = RV_F3_SD; break;
+    default: return;
+  }
+
+  // Load immediate to T0 first
+  emit_load_imm(RV_REG_T0, inst.imm);
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, f3, rd, RV_REG_T0, inst.offset));
+}
+
 static void emit_alu_op(struct ebpf_inst inst) {
   uint8_t op = inst.opcode;
   uint8_t rd = (inst.dst_reg <= 10) ? bpf2rv[inst.dst_reg] : RV_REG_ZERO;
@@ -218,6 +269,32 @@ static void emit_alu_op(struct ebpf_inst inst) {
 /* =========================================================================
  * CORE INSTRUCTION EMITTER
  * ========================================================================= */
+static void emit_prologue() {
+  // Save ra, s0-s4. Allocate 512 bytes for eBPF stack.
+  // Total stack frame: 512 (ebpf) + 64 (saved regs + padding) = 576 bytes
+  // sp must be 16-byte aligned. 576 is 16*36.
+  emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_SP, RV_F3_ADD, RV_REG_SP, -576));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_RA, 568));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_FP, 560));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S1, 552));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S2, 544));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S3, 536));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S4, 528));
+  // Set R10 (s0) to the top of the eBPF stack (sp + 512)
+  emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_FP, RV_F3_ADD, RV_REG_SP, 512));
+}
+
+static void emit_epilogue() {
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_RA, RV_F3_LD, RV_REG_SP, 568));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_FP, RV_F3_LD, RV_REG_SP, 560));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S1, RV_F3_LD, RV_REG_SP, 552));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S2, RV_F3_LD, RV_REG_SP, 544));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S3, RV_F3_LD, RV_REG_SP, 536));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S4, RV_F3_LD, RV_REG_SP, 528));
+  emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_SP, RV_F3_ADD, RV_REG_SP, 576));
+  emit_rv32(RV_INST_RET);
+}
+
 static void generate_insn(struct ebpf_inst inst, int i) {
   uint8_t op = inst.opcode;
 
@@ -227,12 +304,21 @@ static void generate_insn(struct ebpf_inst inst, int i) {
       emit_alu_op(inst);
       break;
     case BPF_JMP:
-    case BPF_JMP32:
       if (BPF_OP(op) == BPF_EXIT) {
-        emit_rv32(RV_INST_RET);
-      } else {
-        emit_jmp(inst, i + 1 + inst.offset);
+        emit_epilogue();
+        break;
       }
+    case BPF_JMP32:
+      emit_jmp(inst, i + 1 + inst.offset);
+      break;
+    case BPF_LDX:
+      emit_ldx(inst);
+      break;
+    case BPF_STX:
+      emit_stx(inst);
+      break;
+    case BPF_ST:
+      emit_st(inst);
       break;
   }
 }
@@ -246,6 +332,7 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
   current_pass = PASS_ANALYZE;
   pc_riscv = 0;
 
+  emit_prologue();
   for (int i = 0; i < len; i++) {
     insn_offsets[i] = pc_riscv;
     generate_insn(prog[i], i);
@@ -256,6 +343,7 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
   // Pass 2: Emission (Generate code)
   current_pass = PASS_EMIT;
   pc_riscv = 0;
+  emit_prologue();
   for (int i = 0; i < len; i++) {
     generate_insn(prog[i], i);
   }

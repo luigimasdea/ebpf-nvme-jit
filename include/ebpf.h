@@ -32,13 +32,31 @@ struct ebpf_inst {
 #define BPF_JMP32 0x06  // 32-bit jumps
 #define BPF_ALU64 0x07  // 64-bit math (e.g., long)
 
-// 2. SOURCE EXTRACTION (4th bit: mask 0x08)
+// 2. SOURCE EXTRACTION (4th bit: mask 0x08) - For ALU and JMP
 #define BPF_SRC(code)   ((code) & 0x08)
 
 #define BPF_K     0x00  // Source is the "imm" field (constant)
 #define BPF_X     0x08  // Source is the "src_reg" (register)
 
-// 3. OPERATION EXTRACTION (High 4 bits: mask 0xf0)
+// 3. SIZE EXTRACTION (Bits 3 and 4: mask 0x18) - For LD, LDX, ST, STX
+#define BPF_SIZE(code)  ((code) & 0x18)
+
+#define BPF_W     0x00  // Word (32-bit)
+#define BPF_H     0x08  // Half-word (16-bit)
+#define BPF_B     0x10  // Byte (8-bit)
+#define BPF_DW    0x18  // Double-word (64-bit)
+
+// 4. MODE EXTRACTION (High 3 bits: mask 0xe0)
+#define BPF_MODE(code)  ((code) & 0xe0)
+
+#define BPF_IMM   0x00
+#define BPF_ABS   0x20
+#define BPF_IND   0x40
+#define BPF_MEM   0x60
+#define BPF_LEN   0x80
+#define BPF_MSH   0xa0
+
+// 5. OPERATION EXTRACTION (High 4 bits: mask 0xf0) - For ALU and JMP
 #define BPF_OP(code)    ((code) & 0xf0)
 
 // Math Operations (ALU / ALU64)

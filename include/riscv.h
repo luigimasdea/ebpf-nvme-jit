@@ -43,11 +43,24 @@
 #define RV_OP_IMM_32  0x1B  // Opcode for ALU32 operations with Immediate (RV64)
 #define RV_OP_ALU_32  0x3B  // Opcode for ALU32 operations between Registers (RV64)
 #define RV_OP_LUI     0x37  // Opcode for Load Upper Immediate
+#define RV_OP_LOAD    0x03  // Opcode for Load instructions (e.g., LD)
+#define RV_OP_STORE   0x23  // Opcode for Store instructions (e.g., SD)
 #define RV_OP_BRANCH  0x63  // Opcode for Branch instructions (e.g., BEQ)
 #define RV_OP_JAL     0x6F  // Opcode for Jump and Link
 
 // FUNCT3
 #define RV_F3_ADD   0x0
+#define RV_F3_LB    0x0   // Load Byte
+#define RV_F3_LH    0x1   // Load Half
+#define RV_F3_LW    0x2   // Load Word
+#define RV_F3_LD    0x3   // Load Double (RV64)
+#define RV_F3_LBU   0x4   // Load Byte Unsigned
+#define RV_F3_LHU   0x5   // Load Half Unsigned
+#define RV_F3_LWU   0x6   // Load Word Unsigned
+#define RV_F3_SB    0x0   // Store Byte
+#define RV_F3_SH    0x1   // Store Half
+#define RV_F3_SW    0x2   // Store Word
+#define RV_F3_SD    0x3   // Store Double (RV64)
 #define RV_F3_BEQ   0x0
 #define RV_F3_BNE   0x1
 #define RV_F3_MUL   0x0   // Funct3 for MUL (M-extension)
@@ -89,6 +102,13 @@
 #define RV_MAKE_R(opcode, rd, funct3, rs1, rs2, funct7) \
     (uint32_t)( ((funct7 & 0x7F) << 25) | ((rs2 & 0x1F) << 20) | ((rs1 & 0x1F) << 15) | \
                 ((funct3 & 0x7) << 12) | ((rd & 0x1F) << 7) | (opcode & 0x7F) )
+
+// Generates an S-type instruction (e.g., SD rs2, imm(rs1))
+// Format: [imm[11:5]] [rs2] [rs1] [funct3] [imm[4:0]] [opcode]
+#define RV_MAKE_S(opcode, funct3, rs1, rs2, imm) \
+    (uint32_t)( (((uint32_t)(imm) & 0xFE0) << 20) | (((uint32_t)(rs2) & 0x1F) << 20) | \
+                (((uint32_t)(rs1) & 0x1F) << 15) | (((uint32_t)(funct3) & 0x7) << 12) | \
+                (((uint32_t)(imm) & 0x1F) << 7) | ((uint32_t)(opcode) & 0x7F) )
 
 // Generates a U-Type instruction (e.g., LUI rd, imm)
 // Format: [20 bit: imm] [5 bit: rd] [7 bit: opcode]

@@ -5,15 +5,29 @@ import sys
 import time
 
 # eBPF Constants (Mirroring include/ebpf.h)
+BPF_LD    = 0x00
+BPF_LDX   = 0x01
+BPF_ST    = 0x02
 BPF_STX   = 0x03
 BPF_ALU   = 0x04
 BPF_JMP   = 0x05
 BPF_JMP32 = 0x06
 BPF_ALU64 = 0x07
 
-
 BPF_K     = 0x00
 BPF_X     = 0x08
+
+# Size modifiers
+BPF_W     = 0x00
+BPF_H     = 0x08
+BPF_B     = 0x10
+BPF_DW    = 0x18
+
+# Mode modifiers
+BPF_IMM   = 0x00
+BPF_ABS   = 0x20
+BPF_IND   = 0x40
+BPF_MEM   = 0x60
 
 BPF_ADD   = 0x00
 BPF_SUB   = 0x10
@@ -284,7 +298,7 @@ if __name__ == "__main__":
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 1)
 
-    # Test 20: JMP32_JEQ (True, ignoring upper 32 bits)
+    # Test 21: JMP32_JEQ (True, ignoring upper 32 bits)
     runner.add_test("JMP32_JEQ_K_TRUE", [
         {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 0x1}, # Load 1
         # Shift left by 32 to put 1 in upper bits, keeping 0 in lower 32
@@ -294,6 +308,48 @@ if __name__ == "__main__":
         {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 42},
         {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
     ], 42)
+
+    # Test 22: STX and LDX (Double Word)
+    runner.add_test("MEM_STX_LDX_DW", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 0x12345678},
+        {"op": BPF_STX | BPF_DW | BPF_MEM,  "dst": 10, "src": 1, "off": -8, "imm": 0},    # *(u64*)(R10 - 8) = R1
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 1, "src": 0, "off": 0, "imm": 0},       # Clear R1
+        {"op": BPF_LDX | BPF_DW | BPF_MEM,  "dst": 0, "src": 10, "off": -8, "imm": 0},    # R0 = *(u64*)(R10 - 8)
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0x12345678)
+
+    # Test 23: ST (Immediate store)
+    runner.add_test("MEM_ST_W", [
+        {"op": BPF_ST | BPF_W | BPF_MEM, "dst": 10, "src": 0, "off": -4, "imm": 0xABCDE}, # *(u32*)(R10 - 4) = 0xABCDE
+        {"op": BPF_LDX | BPF_W | BPF_MEM, "dst": 0, "src": 10, "off": -4, "imm": 0},      # R0 = *(u32*)(R10 - 4)
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 0xABCDE)
+
+    # Bug Reproduction: BPF_JMP32 | BPF_JA should NOT act as an unconditional jump anymore
+    # Because we fixed it to only work for BPF_JMP class.
+    # So BPF_JMP32 | BPF_JA should now fall through to emit_jmp,
+    # which will then hit the default switch case (doing nothing for JA)
+    # Wait, if BPF_JMP32 | BPF_JA falls through to emit_jmp,
+    # emit_jmp checks if (BPF_OP(op) == BPF_JA) and emits a jump.
+    # So it still works as JA. 
+    # The user said: "BPF_JA is only available for BPF_JMP (64bit), not BPF_JMP32"
+    # So I should probably make emit_jmp ONLY handle BPF_JA if it's NOT jmp32.
+
+    # Let's see what happens with current implementation.
+    runner.add_test("BUG_JMP32_JA_DISABLED", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 1},
+        {"op": BPF_JMP32 | BPF_JA, "dst": 0, "src": 0, "off": 1, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 2},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 2) # Now expecting 2 because JA should be ignored for JMP32
+
+    # Bug Reproduction: BPF_JMP32 | BPF_EXIT should NOT act as exit anymore
+    runner.add_test("BUG_JMP32_EXIT_DISABLED", [
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 42},
+        {"op": BPF_JMP32 | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+        {"op": BPF_ALU64 | BPF_MOV | BPF_K, "dst": 0, "src": 0, "off": 0, "imm": 43},
+        {"op": BPF_JMP | BPF_EXIT, "dst": 0, "src": 0, "off": 0, "imm": 0},
+    ], 43) # Now expecting 43 because EXIT should be ignored for JMP32
 
     success = runner.run_all()
     sys.exit(0 if success else 1)
