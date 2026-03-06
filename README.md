@@ -1,76 +1,78 @@
-# Compilatore JIT eBPF per RISC-V
+# eBPF JIT Compiler for RISC-V (RV64G)
 
-Questo progetto implementa un compilatore **Just-In-Time (JIT)** leggero progettato per tradurre il bytecode eBPF in istruzioni native **RISC-V 64-bit**. Il compilatore è concepito per girare in ambienti bare-metal o firmware, permettendo l'esecuzione efficiente di filtri o programmi eBPF direttamente sull'hardware RISC-V.
+This project implements a lightweight **Just-In-Time (JIT)** compiler designed to translate eBPF bytecode into native **64-bit RISC-V (RV64G)** instructions. The compiler is built for bare-metal or firmware environments, enabling efficient execution of eBPF programs directly on RISC-V hardware.
 
-## Caratteristiche Principali
+## Key Features
 
-*   **Supporto ALU completo**: Implementazione di operazioni a 64-bit (`ALU64`) e 32-bit (`ALU`).
-*   **Conformità Standard eBPF**:
-    *   **Zero-Extension**: Le operazioni a 32-bit eseguono correttamente l'azzeramento dei 32 bit superiori, evitando i problemi di estensione del segno nativi di RISC-V.
-    *   **Divisione Sicura**: Gestione della divisione per zero secondo lo standard eBPF (restituisce 0 invece di causare eccezioni o risultati indefiniti).
-    *   **Istruzioni Endianness**: Supporto completo per `BPF_END` (conversione Little Endian e Big Endian) per formati a 16, 32 e 64 bit.
-*   **Salti e Controllo Flusso**: Supporto per salti condizionali a 64 e 32 bit, chiamate a helper (`CALL`) ed `EXIT`.
-*   **Operazioni di Memoria**: Supporto per Load/Store di vari formati (Byte, Half, Word, Double Word).
-*   **Operazioni Atomiche**: Supporto sperimentale per istruzioni atomiche (estensione 'A' di RISC-V).
-*   **100% Bare-Metal**: Nessuna dipendenza da Linux, libc o sistemi operativi host. Progettato per girare direttamente sul silicio (o in emulazione hardware pura).
+*   **Full ALU Support**: Implementation of 64-bit (`ALU64`) and 32-bit (`ALU`) operations.
+*   **eBPF Standard Compliance**:
+    *   **Zero-Extension**: 32-bit operations correctly zero-extend to 64 bits, adhering to the eBPF specification and avoiding RISC-V's default sign-extension.
+    *   **Safe Division**: Division-by-zero handling (returns 0 as per eBPF standard) to prevent hardware exceptions.
+    *   **Endianness Instructions**: Support for `BPF_END` (Little Endian and Big Endian conversions) for 16, 32, and 64-bit formats.
+*   **Control Flow**: Support for conditional jumps (32/64-bit), helper calls (`CALL`), and `EXIT`.
+*   **Memory Operations**: Support for Load/Store instructions (Byte, Half, Word, Double Word).
+*   **Atomic Operations**: Experimental support for atomic operations (RISC-V 'A' extension).
+*   **100% Bare-Metal**: No dependencies on Linux, libc, or host operating systems. Designed to run directly on silicon (or in pure hardware emulation).
 
-## Prerequisiti
+## Prerequisites
 
-Per compilare ed eseguire il progetto, sono necessari i seguenti strumenti:
+To build and run the project, you need:
 
-1.  **Toolchain RISC-V**: `riscv64-linux-gnu-gcc`
-2.  **Emulatore QEMU**: `qemu-system-riscv64`
-3.  **Python 3**: Necessario per l'esecuzione della suite di test automatizzata.
+1.  **RISC-V Toolchain**: `riscv64-linux-gnu-gcc`
+2.  **LLVM/Clang**: `clang` (with BPF target support) and `llvm-objcopy`
+3.  **QEMU Emulator**: `qemu-system-riscv64`
+4.  **Utilities**: `xxd`, `make`, `python3` (for tests)
 
-## Struttura del Progetto
+## Project Structure
 
-*   `src/jit.c`: Il cuore del compilatore JIT (decodifica eBPF ed emissione RISC-V).
-*   `src/main.c`: Entry point del firmware e logica di test manuale.
-*   `include/ebpf.h`: Definizioni degli opcode e delle strutture eBPF.
-*   `include/riscv.h`: Macro e costruttori per le istruzioni macchina RISC-V.
-*   `arch/`: Script di linker e codice di avvio (`boot.S`) per ambiente bare-metal.
-*   `tests/`: Suite di test in Python per la validazione automatica del JIT.
+*   `src/jit.c`: The core of the JIT compiler (eBPF decoding and RISC-V emission).
+*   `src/main.c`: Firmware entry point and manual test logic.
+*   `apps/`: Host-side C programs to be compiled into eBPF.
+*   `include/ebpf.h`: eBPF opcode and structure definitions.
+*   `include/riscv.h`: Macros and constructors for RISC-V machine instructions.
+*   `arch/`: Linker script and boot code (`boot.S`) for bare-metal environment.
+*   `tests/`: Python test suite for automated JIT validation.
 
-## Compilazione
+## Compilation
 
-Il progetto utilizza un `Makefile` per gestire la compilazione del firmware.
+The project uses a `Makefile` to manage firmware compilation.
 
-Per compilare il progetto e generare il file `firmware.elf`:
+To compile the project and generate the `firmware.elf` file:
 ```bash
 make
 ```
 
-Per pulire i file compilati:
+To clean compiled files:
 ```bash
 make clean
 ```
 
-## Esecuzione
+## Execution
 
-È possibile eseguire il firmware compilato utilizzando l'emulatore QEMU integrato nel `Makefile`:
+You can run the compiled firmware using the QEMU emulator integrated into the `Makefile`:
 
 ```bash
 make run
 ```
-Il firmware caricherà un programma eBPF d'esempio, lo compilerà tramite il JIT e visualizzerà il risultato dell'esecuzione sulla console UART.
+The firmware will load a sample eBPF program, compile it via the JIT, and display the execution result on the UART console.
 
-## Test Automatizzati
+## Automated Testing
 
-Il progetto include una suite di test completa che verifica la correttezza di ogni istruzione supportata (ALU, JMP, Memoria, Endianness, ecc.).
+The project includes a comprehensive test suite that verifies the correctness of every supported instruction (ALU, JMP, Memory, Endianness, etc.).
 
-Per eseguire tutti i test:
+To run all tests:
 ```bash
 python3 tests/run_tests.py
 ```
 
-La suite di test esegue le seguenti operazioni per ogni caso:
-1. Genera un programma eBPF specifico.
-2. Compila il firmware includendo quel programma.
-3. Avvia QEMU e cattura l'output.
-4. Confronta il risultato restituito dal registro `R0` con il valore atteso.
+The test suite performs the following operations for each case:
+1. Generates a specific eBPF program.
+2. Compiles the firmware including that program.
+3. Starts QEMU and captures the output.
+4. Compares the result returned by register `R0` with the expected value.
 
-## Note Tecniche
+## Technical Notes
 
-Il JIT opera in due passaggi:
-1.  **Analisi**: Calcola la dimensione totale del codice generato e mappa gli offset delle istruzioni eBPF sugli indirizzi RISC-V (necessario per risolvere i salti).
-2.  **Emissione**: Genera il codice macchina binario direttamente nella memoria di esecuzione.
+The JIT operates in two passes:
+1.  **Analysis**: Calculates the total size of the generated code and maps eBPF instruction offsets to RISC-V addresses (necessary for resolving jumps).
+2.  **Emission**: Generates binary machine code directly into the execution memory.

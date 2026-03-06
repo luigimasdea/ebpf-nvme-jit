@@ -1,5 +1,20 @@
 [
   {
+    "file": "apps/main.c",
+    "arguments": [
+      "clang",
+      "-target",
+      "bpf",
+      "-O2",
+      "-c",
+      "apps/main.c",
+      "-o",
+      "build/app.o"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
+    "output": "build/app.o"
+  },
+  {
     "file": "arch/boot.S",
     "arguments": [
       "riscv64-linux-gnu-gcc",

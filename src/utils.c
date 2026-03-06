@@ -12,27 +12,18 @@ void uart_print_int(int n) {
         uart_print("0");
         return;
     }
-    
+    if (n < 0) {
+        uart_print("-");
+        n = -n;
+    }
     char buf[12];
     int i = 10;
-    buf[i--] = '\0';
-    
-    int is_negative = 0;
-    if (n < 0) {
-        is_negative = 1;
-        n = -n; // Make it positive for the math loop
-    }
-    
-    while (n > 0 && i >= 0) {
+    buf[11] = '\0';
+    while (n > 0) {
         buf[i--] = (n % 10) + '0';
         n /= 10;
     }
-    
-    if (is_negative) {
-        buf[i--] = '-';
-    }
-    
-    uart_print(&buf[i+1]);
+    uart_print(&buf[i + 1]);
 }
 
 void uart_print_uint64(uint64_t n) {
@@ -40,26 +31,24 @@ void uart_print_uint64(uint64_t n) {
         uart_print("0");
         return;
     }
-    
-    char buf[22];
-    int i = 20;
-    buf[i--] = '\0';
-    
-    while (n > 0 && i >= 0) {
+    char buf[21];
+    int i = 19;
+    buf[20] = '\0';
+    while (n > 0) {
         buf[i--] = (n % 10) + '0';
         n /= 10;
     }
-    
-    uart_print(&buf[i+1]);
+    uart_print(&buf[i + 1]);
 }
 
 void uart_print_hex(uint32_t n) {
-    char hex_chars[] = "0123456789abcdef";
-    char buf[9];
-    buf[8] = '\0';
+    const char *hex = "0123456789ABCDEF";
     for (int i = 7; i >= 0; i--) {
-        buf[i] = hex_chars[n & 0xf];
-        n >>= 4;
+        uart_print_char(hex[(n >> (i * 4)) & 0xF]);
     }
-    uart_print(buf);
+}
+
+void uart_print_char(char c) {
+    volatile char *uart = (volatile char *)0x10000000;
+    *uart = c;
 }

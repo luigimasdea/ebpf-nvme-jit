@@ -1,6 +1,7 @@
 #ifndef EBPF_H
 #define EBPF_H
 
+#ifndef __ASSEMBLER__
 #include <stdint.h>
 
 /* =========================================================================
@@ -14,6 +15,7 @@ struct ebpf_inst {
     int16_t  offset;    // Byte 2-3: Offset for jumps (e.g., +5 instructions)
     int32_t  imm;       // Byte 4-7: Immediate value (e.g., our 42)
 };
+#endif
 
 /* =========================================================================
  * OPCODE DECODING (8 bits)

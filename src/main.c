@@ -2,7 +2,9 @@
 #include "jit.h"
 #include "utils.h"
 
-// eBPF Helper Lookup Table
+/**
+ * eBPF Helper Lookup Table
+ */
 void* bpf_helper_lookup(int32_t imm) {
     switch (imm) {
         case 1: return (void*)uart_print;
@@ -12,42 +14,30 @@ void* bpf_helper_lookup(int32_t imm) {
     }
 }
 
-#ifdef TEST_RUNNER
-#include "test_case.h"
-#else
-struct ebpf_inst test_prog[] = {
-    // Context (R1) points to a memory location.
-    // Let's load a 64-bit value from R1 (ctx) into R0.
-    // R0 = *(u64 *)R1
-    { BPF_LDX | BPF_DW | BPF_MEM, 0, 1, 0, 0 },
-    
-    // R0 = R0 + 5
-    { BPF_ALU64 | BPF_ADD | BPF_K, 0, 0, 0, 5 },
-    
-    // EXIT (Returns R0)
-    { BPF_JMP | BPF_EXIT, 0, 0, 0, 0 }
-};
-#endif
+#include "gen/app_data.h"
+#define test_prog ((struct ebpf_inst *)app_bin)
+#define test_prog_len app_bin_len
 
 int main() {
-    uart_print("\n[NVMe JIT] Booting firmware...\n");
+    uart_print("\n[NVMe JIT] Booting JIT Firmware...\n");
 
-    int num_inst = sizeof(test_prog) / sizeof(struct ebpf_inst);
+    // Determine the number of eBPF instructions (8 bytes each)
+    int num_inst = test_prog_len / sizeof(struct ebpf_inst);
 
-    uart_print("[NVMe JIT] Compiling eBPF bytecode to RISC-V...\n");
+    uart_print("[NVMe JIT] Compiling Host App to RISC-V...\n");
 
-    // DATA FOR CONTEXT
+    // Sample data structure passed as context (R1) to the eBPF program
     uint64_t ctx_data = 100;
     
-    // RUN THE JIT COMPILER
-    uint64_t result = (uint64_t)(uintptr_t)run_jit_filter(test_prog, num_inst, &ctx_data);
+    // Execute JIT compilation and run the resulting machine code
+    uint64_t result = run_jit_filter(test_prog, num_inst, &ctx_data);
 
-    // PRINT THE RESULT
+    // Display the execution result
     uart_print("\n>>> JIT EXECUTION RESULT: ");
     uart_print_uint64(result);
     uart_print(" <<<\n\n");
 
-    // CLEAN SHUTDOWN
+    // Shutdown the emulated system (Exit QEMU)
     uart_print("[NVMe JIT] Shutting down...\n");
     *(volatile uint32_t *)0x100000 = 0x5555; 
 
