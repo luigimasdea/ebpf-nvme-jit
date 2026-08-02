@@ -14,9 +14,14 @@ void* bpf_helper_lookup(int32_t imm) {
     }
 }
 
+#ifdef TEST_RUNNER
+#include "test_case.h"
+#define test_prog_len sizeof(test_prog)
+#else
 #include "gen/app_data.h"
 #define test_prog ((struct ebpf_inst *)app_bin)
 #define test_prog_len app_bin_len
+#endif
 
 int main() {
     uart_print("\n[NVMe JIT] Booting JIT Firmware...\n");
@@ -28,7 +33,7 @@ int main() {
 
     // Sample data structure passed as context (R1) to the eBPF program
     uint64_t ctx_data = 100;
-    
+
     // Execute JIT compilation and run the resulting machine code
     uint64_t result = run_jit_filter(test_prog, num_inst, &ctx_data);
 
