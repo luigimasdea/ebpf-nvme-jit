@@ -8,6 +8,7 @@
 #define NVME_CMD_EBPF_ACTIVATE 0xC1
 #define NVME_CMD_EBPF_EXECUTE  0xC2
 #define NVME_CMD_EBPF_UNLOAD   0xC3
+#define NVME_CMD_SHUTDOWN      0xFF
 
 /* Submission Queue Entry (SQE) - 64 Bytes */
 struct nvme_sqe {
