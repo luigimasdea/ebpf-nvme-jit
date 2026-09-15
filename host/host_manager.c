@@ -18,7 +18,13 @@
 #define VCON_SIZE           4096
 
 #define NVME_QUEUE_OFFSET   0x00401000ULL  // 0x222401000 (NVMe Queues)
-#define SLM_OFFSET          0x00500000ULL  // 0x222500000 (Subsystem Local Memory / Payload)
+
+// Subsystem Local Memory (SLM) allocations inside 0x222500000 (11MB region)
+#define SLM_PROG_OFFSET     0x00500000ULL  // 0x222500000 (64KB buffer for eBPF bytecode)
+#define SLM_DATA_OFFSET     0x00510000ULL  // 0x222510000 (Buffer for dataset / context)
+
+#define SLM_PROG_PHYS_ADDR  (PHYS_BASE + SLM_PROG_OFFSET)
+#define SLM_DATA_PHYS_ADDR  (PHYS_BASE + SLM_DATA_OFFSET)
 
 struct record {
     uint32_t id;
@@ -111,13 +117,19 @@ static int submit_nvme_cmd(volatile struct nvme_queue_mem *qmem,
     return -2;
 }
 
-int main() {
-    int mem_fd, fw_fd;
+int main(int argc, char *argv[]) {
+    int mem_fd, fw_fd, app_fd;
     uint8_t *map_base;
+    const char *app_bin_path = (argc > 1) ? argv[1] : "apps/app.bin";
 
     printf("====================================================\n");
     printf("[HOST] VisionFive 2 NVMe Computational Storage Host\n");
     printf("====================================================\n");
+
+    // Check for eBPF binary fallback location if running from host/ directory
+    if (access(app_bin_path, F_OK) != 0 && argc <= 1) {
+        app_bin_path = "../apps/app.bin";
+    }
 
     mem_fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (mem_fd < 0) {
@@ -136,7 +148,8 @@ int main() {
     vcon_idx = (volatile uint32_t *)(map_base + VCON_OFFSET + VCON_SIZE - 4);
     vcon_buf = (volatile char *)(map_base + VCON_OFFSET);
     volatile struct nvme_queue_mem *qmem = (volatile struct nvme_queue_mem *)(map_base + NVME_QUEUE_OFFSET);
-    struct analytics_context *slm_ctx = (struct analytics_context *)(map_base + SLM_OFFSET);
+    uint8_t *slm_prog = map_base + SLM_PROG_OFFSET;
+    struct analytics_context *slm_ctx = (struct analytics_context *)(map_base + SLM_DATA_OFFSET);
 
     // 1. Reset Virtual Console and NVMe Queues
     printf("[HOST] Resetting VCON and NVMe queues in RAM...\n");
@@ -144,8 +157,30 @@ int main() {
     memset((void*)vcon_buf, 0, VCON_SIZE - 4);
     memset((void*)qmem, 0, sizeof(struct nvme_queue_mem));
 
-    // 2. Inject firmware binary
-    printf("[HOST] Injecting firmware into RAM (0x222000000)...\n");
+    // 2. Load eBPF application binary from disk into SLM
+    printf("[HOST] Loading eBPF program from '%s' into SLM (0x%llx)...\n", app_bin_path, (unsigned long long)SLM_PROG_PHYS_ADDR);
+    app_fd = open(app_bin_path, O_RDONLY);
+    if (app_fd < 0) {
+        perror("open eBPF app binary");
+        printf("[HOST ERROR] Could not open '%s'. Please run 'make app' first.\n", app_bin_path);
+        munmap(map_base, MAP_SIZE);
+        close(mem_fd);
+        return 1;
+    }
+    ssize_t prog_bytes = read(app_fd, slm_prog, 0x10000); // Up to 64KB
+    close(app_fd);
+
+    if (prog_bytes <= 0 || (prog_bytes % 8) != 0) {
+        printf("[HOST ERROR] Invalid eBPF binary size: %zd bytes (must be multiple of 8).\n", prog_bytes);
+        munmap(map_base, MAP_SIZE);
+        close(mem_fd);
+        return 1;
+    }
+    uint32_t num_inst = prog_bytes / 8;
+    printf("[HOST] Loaded %zd bytes (%u eBPF instructions) into SLM.\n", prog_bytes, num_inst);
+
+    // 3. Inject firmware binary into RAM
+    printf("[HOST] Injecting generic CSD firmware into RAM (0x222000000)...\n");
     fw_fd = open(FW_BINARY, O_RDONLY);
     if (fw_fd < 0) {
         fw_fd = open("../" FW_BINARY, O_RDONLY);
@@ -170,8 +205,8 @@ int main() {
     drain_vcon();
     printf("--- [CORE 3 READY] ---\n\n");
 
-    // 3. Prepare dataset in SLM (Subsystem Local Memory at 0x222500000)
-    printf("[HOST] Preparing dataset & query parameters in SLM (0x222500000)...\n");
+    // 4. Prepare dataset in SLM Data slot (0x222510000)
+    printf("[HOST] Preparing dataset & query parameters in SLM (0x%llx)...\n", (unsigned long long)SLM_DATA_PHYS_ADDR);
     memset(slm_ctx, 0, sizeof(struct analytics_context));
     slm_ctx->record_count = 10;
     slm_ctx->target_type = 1;      // Filter: Type == SALE (1)
@@ -198,19 +233,21 @@ int main() {
     struct nvme_sqe sqe;
     struct nvme_cqe cqe;
 
-    // 4. Send TP4091 Command 1: LOAD
-    printf("\n[HOST -> DEV] Submitting NVME_CMD_EBPF_LOAD (cid=1)...\n");
+    // 5. Send TP4091 Command 1: LOAD (Pointing dynamically to SLM program buffer)
+    printf("\n[HOST -> DEV] Submitting NVME_CMD_EBPF_LOAD (cid=1, prp1=0x%llx, insns=%u)...\n",
+           (unsigned long long)SLM_PROG_PHYS_ADDR, num_inst);
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_EBPF_LOAD;
     sqe.cid = 1;
-    sqe.prp1 = 0; // Use default embedded program
+    sqe.prp1 = SLM_PROG_PHYS_ADDR; // Dynamic physical pointer in SLM!
+    sqe.cdw10 = num_inst;          // Instruction count
     if (submit_nvme_cmd(qmem, &sqe, &cqe, 1000) != 0 || cqe.status != 0) {
         printf("[HOST ERROR] LOAD command failed! (status=0x%x)\n", cqe.status);
         goto cleanup;
     }
     printf("[HOST <- DEV] LOAD completed successfully (cid=%d, status=0x%x)\n", cqe.cid, cqe.status);
 
-    // 5. Send TP4091 Command 2: ACTIVATE (JIT Compilation)
+    // 6. Send TP4091 Command 2: ACTIVATE (JIT Compilation)
     printf("\n[HOST -> DEV] Submitting NVME_CMD_EBPF_ACTIVATE (cid=2)...\n");
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_EBPF_ACTIVATE;
@@ -221,12 +258,12 @@ int main() {
     }
     printf("[HOST <- DEV] ACTIVATE completed (JIT compiled) (cid=%d, status=0x%x)\n", cqe.cid, cqe.status);
 
-    // 6. Send TP4091 Command 3: EXECUTE (Run on SLM context)
-    printf("\n[HOST -> DEV] Submitting NVME_CMD_EBPF_EXECUTE (cid=3, ctx=0x222500000)...\n");
+    // 7. Send TP4091 Command 3: EXECUTE (Run on SLM context at 0x222510000)
+    printf("\n[HOST -> DEV] Submitting NVME_CMD_EBPF_EXECUTE (cid=3, ctx=0x%llx)...\n", (unsigned long long)SLM_DATA_PHYS_ADDR);
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_EBPF_EXECUTE;
     sqe.cid = 3;
-    sqe.prp1 = 0x222500000ULL; // Physical SLM address of analytics_context
+    sqe.prp1 = SLM_DATA_PHYS_ADDR; // Physical SLM address of analytics_context
     if (submit_nvme_cmd(qmem, &sqe, &cqe, 1000) != 0 || cqe.status != 0) {
         printf("[HOST ERROR] EXECUTE command failed! (status=0x%x)\n", cqe.status);
         goto cleanup;
@@ -241,7 +278,7 @@ int main() {
     printf("  Max matched amount:       $%u\n", slm_ctx->max_matched_amount);
     printf("====================================================\n\n");
 
-    // 7. Send TP4091 Command 4: SHUTDOWN (Park Core 3)
+    // 8. Send TP4091 Command 4: SHUTDOWN (Park Core 3)
     printf("[HOST -> DEV] Submitting NVME_CMD_SHUTDOWN (cid=4)...\n");
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_SHUTDOWN;

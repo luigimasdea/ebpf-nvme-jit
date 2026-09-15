@@ -16,10 +16,6 @@ void* bpf_helper_lookup(int32_t imm) {
     }
 }
 
-#include "gen/app_data.h"
-#define default_prog ((struct ebpf_inst *)app_bin)
-#define default_prog_len (app_bin_len / sizeof(struct ebpf_inst))
-
 static void stop_hart(void) {
     uart_print("[NVMe JIT] Halting Hart via SBI HSM...\n");
     register unsigned long a7 asm("a7") = 0x48534D;
@@ -33,15 +29,15 @@ static void stop_hart(void) {
 
 int main() {
     uart_print("\n========================================\n");
-    uart_print("[NVMe JIT] Firmware Booted (AMP Mode)\n");
+    uart_print("[NVMe JIT] Generic CSD Firmware Booted\n");
     uart_print("[NVMe JIT] Waiting for Host TP4091 commands...\n");
     uart_print("========================================\n\n");
 
     // Initialize NVMe Submission & Completion Queues in Shared RAM
     nvme_queue_init();
 
-    struct ebpf_inst *loaded_prog = (struct ebpf_inst *)default_prog;
-    uint32_t loaded_len = default_prog_len;
+    struct ebpf_inst *loaded_prog = (void *)0;
+    uint32_t loaded_len = 0;
     int is_activated = 0;
 
     // Main NVMe Event / Polling Loop
@@ -61,15 +57,14 @@ int main() {
 
         switch (sqe.opcode) {
             case NVME_CMD_EBPF_LOAD: {
-                // If prp1 is specified by Host, use that memory address;
-                // otherwise fallback to precompiled default program.
-                if (sqe.prp1 != 0) {
-                    loaded_prog = (struct ebpf_inst *)sqe.prp1;
-                    loaded_len = sqe.cdw10; // Number of eBPF instructions
-                } else {
-                    loaded_prog = (struct ebpf_inst *)default_prog;
-                    loaded_len = default_prog_len;
+                if (sqe.prp1 == 0 || sqe.cdw10 == 0) {
+                    uart_print("[NVMe JIT] LOAD error: invalid prp1 or instruction count!\n");
+                    nvme_post_cqe(sqe.cid, 0, 1);
+                    break;
                 }
+
+                loaded_prog = (struct ebpf_inst *)sqe.prp1;
+                loaded_len = sqe.cdw10; // Number of eBPF instructions
                 is_activated = 0;
 
                 uart_print("[NVMe JIT] LOAD: prog at 0x");
@@ -127,8 +122,8 @@ int main() {
 
             case NVME_CMD_EBPF_UNLOAD: {
                 uart_print("[NVMe JIT] UNLOAD: Program unloaded.\n");
-                loaded_prog = (struct ebpf_inst *)default_prog;
-                loaded_len = default_prog_len;
+                loaded_prog = (void *)0;
+                loaded_len = 0;
                 is_activated = 0;
                 nvme_post_cqe(sqe.cid, 0, 0);
                 break;

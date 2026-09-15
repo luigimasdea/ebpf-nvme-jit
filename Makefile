@@ -3,40 +3,38 @@
 # ==============================================================================
 
 APP_SRC ?= apps/analytics.c
-GEN_HEADER = firmware/include/gen/app_data.h
+APP_BIN ?= apps/app.bin
 
 # Tools
 BPF_CC ?= clang
 OBJCOPY ?= llvm-objcopy
-XXD ?= xxd
 
 UNAME_M := $(shell uname -m)
 
 .PHONY: all firmware host kick app clean help
 
 ifeq ($(UNAME_M),riscv64)
-all: firmware host kick
+all: firmware host app kick
 else
-all: firmware host
+all: firmware host app
 endif
 
 help:
 	@echo "eBPF-NVMe-JIT Build System"
 	@echo "Targets:"
-	@echo "  make all       - Build firmware, host monitor, and kick_core module"
-	@echo "  make firmware  - Build bare-metal firmware (build/firmware.bin)"
+	@echo "  make all       - Build firmware, host monitor, eBPF app, and kick_core"
+	@echo "  make firmware  - Build generic bare-metal firmware (firmware/build/firmware.bin)"
 	@echo "  make host      - Build userspace host manager (host/host_manager)"
+	@echo "  make app       - Compile standalone eBPF app binary (apps/app.bin)"
 	@echo "  make kick      - Build kernel module kicker (tools/kick_core/vf2_kick.ko)"
-	@echo "  make app       - Compile eBPF app (default: APP_SRC=apps/main.c) into bytecode header"
 	@echo "  make clean     - Clean all build artifacts"
 
-# 1. Compile eBPF app to C header in firmware
+# 1. Compile standalone eBPF app binary
 app: $(APP_SRC)
-	@mkdir -p firmware/include/gen firmware/build
-	$(BPF_CC) -target bpf -O2 -c $(APP_SRC) -o firmware/build/app.o
-	$(OBJCOPY) -O binary --only-section=app firmware/build/app.o firmware/build/app.bin
-	cd firmware/build && cp app.bin app_bin && $(XXD) -i app_bin > ../include/gen/app_data.h && rm app_bin
-	@echo "Generated $(GEN_HEADER) from $(APP_SRC)"
+	@mkdir -p apps/build
+	$(BPF_CC) -target bpf -O2 -c $(APP_SRC) -o apps/build/app.o
+	$(OBJCOPY) -O binary --only-section=app apps/build/app.o $(APP_BIN)
+	@echo "Generated standalone eBPF binary: $(APP_BIN)"
 
 # 2. Sub-module targets
 firmware:
@@ -52,4 +50,4 @@ clean:
 	$(MAKE) -C firmware clean
 	$(MAKE) -C host clean
 	$(MAKE) -C tools/kick_core clean
-	rm -rf firmware/build
+	rm -rf firmware/build apps/build $(APP_BIN)
