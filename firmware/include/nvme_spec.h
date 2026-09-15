@@ -10,6 +10,9 @@
 #define NVME_CMD_EBPF_UNLOAD   0xC3
 #define NVME_CMD_SHUTDOWN      0xFF
 
+/* Submission Queue Flags */
+#define NVME_FLAG_SILENT       0x01  /* Suppress UART logs for pure benchmarking */
+
 /* Submission Queue Entry (SQE) - 64 Bytes */
 struct nvme_sqe {
     uint8_t  opcode;     /* Opcode (e.g., NVME_CMD_EBPF_EXECUTE) */

@@ -24,7 +24,7 @@ struct analytics_context {
     uint32_t min_matched_amount;
 
     // --- Dataset in SLM ---
-    struct record records[16];
+    struct record records[];
 };
 
 __attribute__((section("app")))
@@ -42,9 +42,7 @@ uint64_t app_entry(struct analytics_context *ctx) {
     uint32_t max_val = 0;
     uint32_t min_val = 0xFFFFFFFF;
 
-    for (uint32_t i = 0; i < 16; i++) {
-        if (i >= n)
-            break;
+    for (uint32_t i = 0; i < n; i++) {
 
         uint32_t r_type = ctx->records[i].type;
         uint32_t r_amt = ctx->records[i].amount;

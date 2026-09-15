@@ -1,15 +1,17 @@
 CC = gcc
 CFLAGS = -Wall -O2 -I../firmware/include
 
-TARGET = host_manager
-SRCS = host_manager.c
+TARGETS = host_manager host_benchmark
 
-all: $(TARGET)
+all: $(TARGETS)
 
-$(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)
+host_manager: host_manager.c
+	$(CC) $(CFLAGS) $< -o $@
+
+host_benchmark: host_benchmark.c
+	$(CC) $(CFLAGS) $< -o $@
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGETS)
 
 .PHONY: all clean

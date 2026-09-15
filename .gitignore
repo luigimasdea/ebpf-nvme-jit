@@ -10,6 +10,8 @@
 
 build/
 host/host_manager
+host/host_benchmark
+*.csv
 
 .gdb_history
 .cache

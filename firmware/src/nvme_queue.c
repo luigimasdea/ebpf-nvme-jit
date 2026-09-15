@@ -47,11 +47,11 @@ int nvme_poll_sq(struct nvme_sqe *out_sqe) {
 /**
  * Post a Completion Queue Entry (CQE) back to the Host.
  */
-void nvme_post_cqe(uint16_t cid, uint32_t cdw0, uint16_t status) {
+void nvme_post_cqe(uint16_t cid, uint32_t cdw0, uint32_t rsvd1, uint16_t status) {
     uint32_t tail_idx = qmem->regs.cq_tail % NVME_QUEUE_DEPTH;
 
     qmem->cq[tail_idx].cdw0 = cdw0;
-    qmem->cq[tail_idx].rsvd1 = 0;
+    qmem->cq[tail_idx].rsvd1 = rsvd1;
     qmem->cq[tail_idx].sq_head = (uint16_t)qmem->regs.sq_head;
     qmem->cq[tail_idx].sq_id = 0;
     qmem->cq[tail_idx].cid = cid;
