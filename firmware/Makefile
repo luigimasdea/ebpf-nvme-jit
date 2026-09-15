@@ -24,6 +24,7 @@ LDFLAGS = -T $(ARCH_DIR)/linker.ld -nostdlib -Wl,--no-warn-rwx-segments
 SRCS = $(ARCH_DIR)/boot.S \
        $(SRC_DIR)/main.c \
        $(SRC_DIR)/jit.c \
+       $(SRC_DIR)/nvme_queue.c \
        $(SRC_DIR)/utils.c
 
 TARGET = $(BUILD_DIR)/firmware.elf

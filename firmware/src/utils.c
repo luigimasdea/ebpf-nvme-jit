@@ -44,3 +44,16 @@ void uart_print_hex(uint32_t n) {
     const char *hex = "0123456789ABCDEF";
     for (int i = 7; i >= 0; i--) uart_print_char(hex[(n >> (i * 4)) & 0xF]);
 }
+
+void *memcpy(void *dest, const void *src, uint32_t n) {
+    uint8_t *d = (uint8_t *)dest;
+    const uint8_t *s = (const uint8_t *)src;
+    while (n--) *d++ = *s++;
+    return dest;
+}
+
+void *memset(void *s, int c, uint32_t n) {
+    uint8_t *p = (uint8_t *)s;
+    while (n--) *p++ = (uint8_t)c;
+    return s;
+}

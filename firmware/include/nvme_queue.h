@@ -44,4 +44,9 @@ struct nvme_queue_mem {
     struct nvme_cqe cq[NVME_QUEUE_DEPTH];
 } __attribute__((packed));
 
+/* Queue Management API for Firmware */
+void nvme_queue_init(void);
+int  nvme_poll_sq(struct nvme_sqe *out_sqe);
+void nvme_post_cqe(uint16_t cid, uint32_t cdw0, uint16_t status);
+
 #endif /* NVME_QUEUE_H */
