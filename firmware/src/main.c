@@ -16,15 +16,9 @@ void* bpf_helper_lookup(int32_t imm) {
     }
 }
 
-#ifdef TEST_RUNNER
-#include "test_case.h"
-#define default_prog ((struct ebpf_inst *)test_prog)
-#define default_prog_len (sizeof(test_prog) / sizeof(struct ebpf_inst))
-#else
 #include "gen/app_data.h"
 #define default_prog ((struct ebpf_inst *)app_bin)
 #define default_prog_len (app_bin_len / sizeof(struct ebpf_inst))
-#endif
 
 static void stop_hart(void) {
     uart_print("[NVMe JIT] Halting Hart via SBI HSM...\n");
