@@ -2,7 +2,7 @@
 # eBPF-NVMe-JIT Master Makefile for StarFive VisionFive 2 (AMP Architecture)
 # ==============================================================================
 
-APP_SRC ?= apps/main.c
+APP_SRC ?= apps/filter.c
 GEN_HEADER = firmware/include/gen/app_data.h
 
 # Tools
