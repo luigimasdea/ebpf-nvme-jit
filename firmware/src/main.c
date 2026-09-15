@@ -37,9 +37,14 @@ int main() {
     uart_print_uint64(result);
     uart_print(" <<<\n\n");
 
-    // Shutdown command removed for real hardware compatibility
-    // *(volatile uint32_t *)0x100000 = 0x5555; 
+    uart_print("[NVMe JIT] Test completed. Halting Hart via SBI HSM...\n");
 
+    // Request OpenSBI to stop this Hart (SBI HSM HART_STOP: ext=0x48534D, fid=1)
+    register unsigned long a7 asm("a7") = 0x48534D;
+    register unsigned long a6 asm("a6") = 1;
+    asm volatile("ecall" : : "r"(a7), "r"(a6) : "memory");
+
+    // Fallback loop if OpenSBI returns
     while(1) {
         asm volatile("wfi");
     }
