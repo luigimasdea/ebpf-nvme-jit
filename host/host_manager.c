@@ -20,11 +20,28 @@
 #define NVME_QUEUE_OFFSET   0x00401000ULL  // 0x222401000 (NVMe Queues)
 #define SLM_OFFSET          0x00500000ULL  // 0x222500000 (Subsystem Local Memory / Payload)
 
-// Sample filter dataset matching apps/filter.c
-struct filter_context {
-    uint64_t count;
-    uint64_t threshold;
-    uint64_t values[8];
+struct record {
+    uint32_t id;
+    uint32_t type;       // 1 = SALE, 2 = REFUND, 3 = EXPENSE
+    uint32_t amount;     // Transaction amount
+    uint32_t timestamp;  // Unix timestamp
+};
+
+struct analytics_context {
+    // --- Query Predicates (Inputs) ---
+    uint32_t record_count;
+    uint32_t target_type;
+    uint32_t min_amount;
+    uint32_t max_amount;
+
+    // --- Aggregations (Outputs written back by eBPF) ---
+    uint32_t matches;
+    uint32_t sum_amount;
+    uint32_t max_matched_amount;
+    uint32_t min_matched_amount;
+
+    // --- Dataset in SLM ---
+    struct record records[16];
 };
 
 static volatile uint32_t *vcon_idx;
@@ -119,7 +136,7 @@ int main() {
     vcon_idx = (volatile uint32_t *)(map_base + VCON_OFFSET + VCON_SIZE - 4);
     vcon_buf = (volatile char *)(map_base + VCON_OFFSET);
     volatile struct nvme_queue_mem *qmem = (volatile struct nvme_queue_mem *)(map_base + NVME_QUEUE_OFFSET);
-    struct filter_context *slm_ctx = (struct filter_context *)(map_base + SLM_OFFSET);
+    struct analytics_context *slm_ctx = (struct analytics_context *)(map_base + SLM_OFFSET);
 
     // 1. Reset Virtual Console and NVMe Queues
     printf("[HOST] Resetting VCON and NVMe queues in RAM...\n");
@@ -154,28 +171,39 @@ int main() {
     printf("--- [CORE 3 READY] ---\n\n");
 
     // 3. Prepare dataset in SLM (Subsystem Local Memory at 0x222500000)
-    printf("[HOST] Preparing dataset in Subsystem Local Memory (SLM at 0x222500000)...\n");
-    slm_ctx->count = 8;
-    slm_ctx->threshold = 50;
-    slm_ctx->values[0] = 12;
-    slm_ctx->values[1] = 85;
-    slm_ctx->values[2] = 42;
-    slm_ctx->values[3] = 99;
-    slm_ctx->values[4] = 10;
-    slm_ctx->values[5] = 50;
-    slm_ctx->values[6] = 3;
-    slm_ctx->values[7] = 77;
-    // Expected >= 50: 85, 99, 50, 77 -> 4 matches
+    printf("[HOST] Preparing dataset & query parameters in SLM (0x222500000)...\n");
+    memset(slm_ctx, 0, sizeof(struct analytics_context));
+    slm_ctx->record_count = 10;
+    slm_ctx->target_type = 1;      // Filter: Type == SALE (1)
+    slm_ctx->min_amount = 50;       // Filter: Amount >= 50
+    slm_ctx->max_amount = 500;      // Filter: Amount <= 500
+
+    struct record sample_data[10] = {
+        { .id = 1,  .type = 1, .amount = 120, .timestamp = 1000 }, // MATCH
+        { .id = 2,  .type = 2, .amount = 80,  .timestamp = 1001 }, // Wrong type (2)
+        { .id = 3,  .type = 1, .amount = 40,  .timestamp = 1002 }, // Too low (< 50)
+        { .id = 4,  .type = 1, .amount = 450, .timestamp = 1003 }, // MATCH
+        { .id = 5,  .type = 3, .amount = 300, .timestamp = 1004 }, // Wrong type (3)
+        { .id = 6,  .type = 1, .amount = 600, .timestamp = 1005 }, // Too high (> 500)
+        { .id = 7,  .type = 1, .amount = 200, .timestamp = 1006 }, // MATCH
+        { .id = 8,  .type = 1, .amount = 50,  .timestamp = 1007 }, // MATCH
+        { .id = 9,  .type = 2, .amount = 500, .timestamp = 1008 }, // Wrong type (2)
+        { .id = 10, .type = 1, .amount = 350, .timestamp = 1009 }  // MATCH
+    };
+    memcpy(slm_ctx->records, sample_data, sizeof(sample_data));
+
+    printf("  [Query] Filter: Type == 1 (SALE), Amount in [50, 500], Total Records: 10\n");
+    printf("  [Expected] Matches: 5, Sum: $1170, Min: $50, Max: $450\n");
 
     struct nvme_sqe sqe;
     struct nvme_cqe cqe;
 
     // 4. Send TP4091 Command 1: LOAD
-    printf("[HOST -> DEV] Submitting NVME_CMD_EBPF_LOAD (cid=1)...\n");
+    printf("\n[HOST -> DEV] Submitting NVME_CMD_EBPF_LOAD (cid=1)...\n");
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_EBPF_LOAD;
     sqe.cid = 1;
-    sqe.prp1 = 0; // Use default filter program
+    sqe.prp1 = 0; // Use default embedded program
     if (submit_nvme_cmd(qmem, &sqe, &cqe, 1000) != 0 || cqe.status != 0) {
         printf("[HOST ERROR] LOAD command failed! (status=0x%x)\n", cqe.status);
         goto cleanup;
@@ -198,7 +226,7 @@ int main() {
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_EBPF_EXECUTE;
     sqe.cid = 3;
-    sqe.prp1 = 0x222500000ULL; // Physical SLM address of filter_context
+    sqe.prp1 = 0x222500000ULL; // Physical SLM address of analytics_context
     if (submit_nvme_cmd(qmem, &sqe, &cqe, 1000) != 0 || cqe.status != 0) {
         printf("[HOST ERROR] EXECUTE command failed! (status=0x%x)\n", cqe.status);
         goto cleanup;
@@ -206,6 +234,11 @@ int main() {
     printf("[HOST <- DEV] EXECUTE completed! (cid=%d, status=0x%x)\n", cqe.cid, cqe.status);
     printf("\n====================================================\n");
     printf(">>> NVMe COMPUTATIONAL RESULT (CDW0): %u MATCHES <<<\n", cqe.cdw0);
+    printf("--- Subsystem Local Memory (SLM) Aggregations ---\n");
+    printf("  Matches (written to SLM): %u\n", slm_ctx->matches);
+    printf("  Sum of matched amounts:   $%u\n", slm_ctx->sum_amount);
+    printf("  Min matched amount:       $%u\n", slm_ctx->min_matched_amount);
+    printf("  Max matched amount:       $%u\n", slm_ctx->max_matched_amount);
     printf("====================================================\n\n");
 
     // 7. Send TP4091 Command 4: SHUTDOWN (Park Core 3)
