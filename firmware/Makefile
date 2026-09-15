@@ -1,5 +1,11 @@
 # --- Toolchain ---
-CROSS_COMPILE ?= riscv64-linux-gnu-
+UNAME_M := $(shell uname -m)
+ifeq ($(UNAME_M),riscv64)
+  CROSS_COMPILE ?=
+else
+  CROSS_COMPILE ?= riscv64-linux-gnu-
+endif
+
 CC = $(CROSS_COMPILE)gcc
 OBJCOPY = $(CROSS_COMPILE)objcopy
 
