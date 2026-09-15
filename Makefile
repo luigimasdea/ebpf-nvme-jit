@@ -1,53 +1,49 @@
-# --- Path Configurations ---
+# ==============================================================================
+# eBPF-NVMe-JIT Master Makefile for StarFive VisionFive 2 (AMP Architecture)
+# ==============================================================================
+
 APP_SRC ?= apps/main.c
-BUILD_DIR = build
-GEN_DIR = include/gen
+GEN_HEADER = firmware/include/gen/app_data.h
 
-# --- Toolchain ---
-CC = riscv64-linux-gnu-gcc
-BPF_CC = clang
-OBJCOPY = llvm-objcopy
-QEMU = qemu-system-riscv64
+# Tools
+BPF_CC ?= clang
+OBJCOPY ?= llvm-objcopy
+XXD ?= xxd
 
-# --- RISC-V Build Flags ---
-CFLAGS = -march=rv64g -mabi=lp64 -mcmodel=medany -Wall -O0 -g -ffreestanding -nostdlib -Iinclude
-LDFLAGS = -T arch/linker.ld -nostdlib -Wl,--no-warn-rwx-segments
+.PHONY: all firmware host kick app clean help
 
-# --- eBPF Compilation Flags ---
-BPF_CFLAGS = -target bpf -O2 -c -Iinclude
+all: firmware host kick
 
-# --- JIT Firmware Source Files ---
-SRCS = arch/boot.S src/main.c src/jit.c src/utils.c
-TARGET = firmware.elf
+help:
+	@echo "eBPF-NVMe-JIT Build System"
+	@echo "Targets:"
+	@echo "  make all       - Build firmware, host monitor, and kick_core module"
+	@echo "  make firmware  - Build bare-metal firmware (build/firmware.bin)"
+	@echo "  make host      - Build userspace host manager (host/host_manager)"
+	@echo "  make kick      - Build kernel module kicker (tools/kick_core/vf2_kick.ko)"
+	@echo "  make app       - Compile eBPF app (default: APP_SRC=apps/main.c) into bytecode header"
+	@echo "  make clean     - Clean all build artifacts"
 
-# --- Automation Workflow ---
+# 1. Compile eBPF app to C header in firmware
+app: $(APP_SRC)
+	@mkdir -p firmware/include/gen firmware/build
+	$(BPF_CC) -target bpf -O2 -c $(APP_SRC) -o firmware/build/app.o
+	$(OBJCOPY) -O binary --only-section=app firmware/build/app.o firmware/build/app.bin
+	cd firmware/build && cp app.bin app_bin && $(XXD) -i app_bin > ../include/gen/app_data.h && rm app_bin
+	@echo "Generated $(GEN_HEADER) from $(APP_SRC)"
 
-all: $(TARGET)
+# 2. Sub-module targets
+firmware:
+	$(MAKE) -C firmware
 
-# 1. Create build and generation directories
-prepare:
-	mkdir -p $(BUILD_DIR) $(GEN_DIR)
+host:
+	$(MAKE) -C host
 
-# 2. Compile host-side C app to eBPF object file
-$(BUILD_DIR)/app.o: $(APP_SRC) | prepare
-	$(BPF_CC) $(BPF_CFLAGS) $(APP_SRC) -o $@
-
-# 3. Extract the raw bytecode section 'app' from the object file
-$(BUILD_DIR)/app.bin: $(BUILD_DIR)/app.o
-	$(OBJCOPY) -O binary --only-section=app $< $@
-
-# 4. Generate C header from the raw binary for inclusion in JIT firmware
-$(GEN_DIR)/app_data.h: $(BUILD_DIR)/app.bin
-	cp $(BUILD_DIR)/app.bin app_bin
-	xxd -i app_bin > $@
-	rm app_bin
-
-# 5. Compile the final JIT firmware ELF
-$(TARGET): $(GEN_DIR)/app_data.h $(SRCS)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SRCS) -o $(TARGET)
-
-run: $(TARGET)
-	$(QEMU) -machine virt -bios none -kernel $(TARGET) -nographic
+kick:
+	$(MAKE) -C tools/kick_core
 
 clean:
-	rm -rf $(TARGET) $(BUILD_DIR) $(GEN_DIR)
+	$(MAKE) -C firmware clean
+	$(MAKE) -C host clean
+	$(MAKE) -C tools/kick_core clean
+	rm -rf firmware/build

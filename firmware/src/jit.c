@@ -19,7 +19,7 @@ static const uint8_t bpf2rv[11] = {
     RV_REG_FP  // eBPF R10 -> RISC-V fp (Stack Frame Pointer - Read Only)
 };
 
-static uint32_t jit_memory[1024] __attribute__((aligned(4)));
+static uint32_t *jit_memory = (uint32_t *)0x222200000ULL;
 static int pc_riscv = 0;
 
 // Offset Map: Stores the starting RISC-V instruction index for each eBPF instruction
@@ -571,6 +571,11 @@ void compile_ebpf(struct ebpf_inst *prog, int len) {
 uint64_t run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx) {
   compile_ebpf(prog, num_instructions);
 
+  // Critical for VisionFive 2: Ensure data cache is flushed to RAM 
+  // and instruction cache is invalidated before execution.
+  asm volatile("fence rw, rw");
+  asm volatile("fence.i");
+
   uart_print("[DEBUG] JIT Memory Dump:\n");
   for (int i = 0; i < pc_riscv; i++) {
     uart_print("  [");
@@ -580,7 +585,6 @@ uint64_t run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx)
     uart_print("\n");
   }
 
-  asm volatile("fence.i");
   uint64_t (*filter)(void *ctx) = (uint64_t (*)(void *))jit_memory;
   return filter(ctx);
 }

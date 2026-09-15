@@ -2,9 +2,16 @@
 *.elf
 *.bin
 *.out
+*.ko
+*.mod
+*.mod.*
+*.order
+*.symvers
 
 build/
+host/host_manager
 
 .gdb_history
-
 .cache
+compile_commands.json
+
