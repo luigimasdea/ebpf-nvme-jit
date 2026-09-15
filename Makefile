@@ -10,9 +10,15 @@ BPF_CC ?= clang
 OBJCOPY ?= llvm-objcopy
 XXD ?= xxd
 
+UNAME_M := $(shell uname -m)
+
 .PHONY: all firmware host kick app clean help
 
+ifeq ($(UNAME_M),riscv64)
 all: firmware host kick
+else
+all: firmware host
+endif
 
 help:
 	@echo "eBPF-NVMe-JIT Build System"

@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -O2 -I../shared
+CFLAGS = -Wall -O2 -I../firmware/include
 
 TARGET = host_manager
 SRCS = host_manager.c
