@@ -341,13 +341,17 @@ int main(int argc, char *argv[]) {
             printf("[HOST] Firmware injected (%zd bytes).\n", bytes_read);
         }
 
-        system("sh -c 'echo 1 > /sys/devices/system/cpu/cpu3/online 2>/dev/null'");
+        // Ensure Core 3 is offline in Linux
         system("sh -c 'echo 0 > /sys/devices/system/cpu/cpu3/online 2>/dev/null'");
         system("rmmod vf2_kick 2>/dev/null");
 
         printf("[HOST] Kicking Core 3 via OpenSBI HSM...\n");
-        if (system("insmod tools/kick_core/vf2_kick.ko 2>/dev/null") != 0) {
-            system("insmod ../tools/kick_core/vf2_kick.ko 2>/dev/null");
+        int ins_ret = system("insmod tools/kick_core/vf2_kick.ko 2>/dev/null");
+        if (ins_ret != 0) {
+            ins_ret = system("insmod ../tools/kick_core/vf2_kick.ko 2>/dev/null");
+        }
+        if (ins_ret != 0) {
+            fprintf(stderr, "[HOST WARNING] insmod vf2_kick failed! Check 'dmesg | tail'.\n");
         }
 
         printf("[HOST] Waiting for Core 3 boot...\n");
