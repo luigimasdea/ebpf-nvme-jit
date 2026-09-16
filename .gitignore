@@ -11,7 +11,10 @@
 build/
 host/host_manager
 host/host_benchmark
+host/host_storage_loader
+tools/generate_dataset
 *.csv
+
 
 .gdb_history
 .cache

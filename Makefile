@@ -43,11 +43,18 @@ firmware:
 host:
 	$(MAKE) -C host
 
+tools: tools/generate_dataset
+
+tools/generate_dataset: tools/generate_dataset.c
+	$(CC) -Wall -O2 $< -o $@
+
 kick:
 	$(MAKE) -C tools/kick_core
+
 
 clean:
 	$(MAKE) -C firmware clean
 	$(MAKE) -C host clean
 	$(MAKE) -C tools/kick_core clean
-	rm -rf firmware/build apps/build $(APP_BIN)
+	rm -rf firmware/build apps/build $(APP_BIN) tools/generate_dataset
+

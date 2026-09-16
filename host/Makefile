@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -O2 -I../firmware/include
 
-TARGETS = host_manager host_benchmark
+TARGETS = host_manager host_benchmark host_storage_loader
 
 all: $(TARGETS)
 
@@ -10,6 +10,10 @@ host_manager: host_manager.c
 
 host_benchmark: host_benchmark.c
 	$(CC) $(CFLAGS) $< -o $@
+
+host_storage_loader: host_storage_loader.c
+	$(CC) $(CFLAGS) $< -o $@
+
 
 clean:
 	rm -f $(TARGETS)
