@@ -12,6 +12,7 @@ build/
 host/host_manager
 host/host_benchmark
 host/host_storage_loader
+host/host_advanced_loader
 tools/generate_dataset
 *.csv
 

@@ -29,12 +29,15 @@ help:
 	@echo "  make kick      - Build kernel module kicker (tools/kick_core/vf2_kick.ko)"
 	@echo "  make clean     - Clean all build artifacts"
 
-# 1. Compile standalone eBPF app binary
-app: $(APP_SRC)
+# 1. Compile standalone eBPF app binaries
+app: $(APP_SRC) apps/analytics_advanced.c
 	@mkdir -p apps/build
 	$(BPF_CC) -target bpf -O2 -c $(APP_SRC) -o apps/build/app.o
 	$(OBJCOPY) -O binary --only-section=app apps/build/app.o $(APP_BIN)
 	@echo "Generated standalone eBPF binary: $(APP_BIN)"
+	$(BPF_CC) -target bpf -O2 -c apps/analytics_advanced.c -o apps/build/analytics_advanced.o
+	$(OBJCOPY) -O binary --only-section=app apps/build/analytics_advanced.o apps/analytics_advanced.bin
+	@echo "Generated advanced eBPF binary: apps/analytics_advanced.bin"
 
 # 2. Sub-module targets
 firmware:

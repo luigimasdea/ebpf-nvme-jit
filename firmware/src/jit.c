@@ -23,7 +23,7 @@ static uint32_t *jit_memory = (uint32_t *)0x222200000ULL;
 static int pc_riscv = 0;
 
 // Offset Map: Stores the starting RISC-V instruction index for each eBPF instruction
-static uint32_t insn_offsets[256];
+static uint32_t insn_offsets[512];
 
 typedef enum {
   PASS_ANALYZE, // First pass: Calculate offsets and program size
