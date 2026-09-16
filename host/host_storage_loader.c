@@ -127,9 +127,18 @@ static int submit_nvme_cmd_silent(volatile struct nvme_queue_mem *qmem,
     uint32_t tail = qmem->regs.sq_tail;
     uint32_t head = qmem->regs.sq_head;
 
+    // Self-healing: if tail is behind head (e.g. from previous run or unsigned underflow), align
+    if (tail < head) {
+        qmem->regs.sq_tail = head;
+        tail = head;
+        __sync_synchronize();
+    }
+
     if ((tail - head) >= NVME_QUEUE_DEPTH) {
-        fprintf(stderr, "[HOST ERROR] Submission Queue full!\n");
-        return -1;
+        fprintf(stderr, "[HOST WARNING] Submission Queue full (tail=%u, head=%u), forcing realignment...\n", tail, head);
+        qmem->regs.sq_tail = head;
+        tail = head;
+        __sync_synchronize();
     }
 
     uint32_t sq_idx = tail % NVME_QUEUE_DEPTH;
@@ -150,6 +159,10 @@ static int submit_nvme_cmd_silent(volatile struct nvme_queue_mem *qmem,
                 qmem->regs.cq_head++;
                 __sync_synchronize();
                 return 0;
+            } else {
+                // Discard stale CQE from prior run
+                qmem->regs.cq_head++;
+                __sync_synchronize();
             }
         }
     }
@@ -227,13 +240,12 @@ int main(int argc, char *argv[]) {
     // Check if Core 3 is already alive and READY
     if (qmem->regs.status == NVME_STATUS_READY) {
         printf("[HOST] Core 3 is ALREADY alive and READY! Reusing active CSD...\n");
-        // Reset queue pointers without clearing READY status
-        qmem->regs.sq_tail = 0;
-        qmem->regs.sq_head = 0;
-        qmem->regs.cq_tail = 0;
-        qmem->regs.cq_head = 0;
+        // Monotonically align queue pointers without zeroing
+        qmem->regs.sq_tail = qmem->regs.sq_head;
+        qmem->regs.cq_head = qmem->regs.cq_tail;
         __sync_synchronize();
     } else {
+
         // Core 3 is not ready: fresh boot sequence
         *vcon_idx = 0;
         memset((void *)vcon_buf, 0, VCON_SIZE - 4);
