@@ -223,35 +223,47 @@ int main(int argc, char *argv[]) {
     struct analytics_context *ctx_a = (struct analytics_context *)(map_base + SLM_BUF_A_OFFSET);
     struct analytics_context *ctx_b = (struct analytics_context *)(map_base + SLM_BUF_B_OFFSET);
 
-    // Verify Core 3 is READY
-    if (qmem->regs.status != NVME_STATUS_READY) {
-        printf("[HOST] Initializing Core 3 queues and injecting firmware...\n");
-        *vcon_idx = 0;
-        memset((void *)vcon_buf, 0, VCON_SIZE - 4);
-        memset((void *)qmem, 0, sizeof(struct nvme_queue_mem));
+    // 1. Reset Virtual Console and NVMe Queues
+    *vcon_idx = 0;
+    memset((void *)vcon_buf, 0, VCON_SIZE - 4);
+    memset((void *)qmem, 0, sizeof(struct nvme_queue_mem));
 
-        int fw_fd = open(FW_BINARY, O_RDONLY);
-        if (fw_fd < 0) fw_fd = open("../" FW_BINARY, O_RDONLY);
-        if (fw_fd >= 0) {
-            read(fw_fd, map_base, 0x100000);
-            close(fw_fd);
-        }
+    // 2. Inject firmware binary into RAM (0x222000000)
+    printf("[HOST] Injecting generic CSD firmware into RAM (0x222000000)...\n");
+    int fw_fd = open(FW_BINARY, O_RDONLY);
+    if (fw_fd < 0) fw_fd = open("../" FW_BINARY, O_RDONLY);
+    if (fw_fd >= 0) {
+        ssize_t bytes_read = read(fw_fd, map_base, 0x100000);
+        close(fw_fd);
+        printf("[HOST] Firmware injected (%zd bytes).\n", bytes_read);
+    } else {
+        fprintf(stderr, "[HOST WARNING] Could not open firmware binary (%s)!\n", FW_BINARY);
+    }
 
-        printf("[HOST] Waiting for Core 3 boot (ensure vf2_kick is active)...\n");
-        int wait_count = 0;
-        while (qmem->regs.status != NVME_STATUS_READY) {
-            drain_vcon();
-            usleep(10000);
-            if (++wait_count > 500) {
-                fprintf(stderr, "[HOST ERROR] Timeout waiting for Core 3 READY status!\n");
-                munmap(map_base, MAP_SIZE);
-                close(mem_fd);
-                return 1;
-            }
+    // 3. Automatically kick Core 3 via kernel module
+    printf("[HOST] Kicking Core 3 via OpenSBI HSM...\n");
+    system("rmmod vf2_kick 2>/dev/null");
+    if (system("insmod tools/kick_core/vf2_kick.ko 2>/dev/null") != 0) {
+        system("insmod ../tools/kick_core/vf2_kick.ko 2>/dev/null");
+    }
+
+    printf("[HOST] Waiting for Core 3 boot... (if manual: sudo rmmod vf2_kick && sudo insmod tools/kick_core/vf2_kick.ko)\n");
+    printf("--- [CORE 3 CONSOLE] ---\n");
+
+    int wait_count = 0;
+    while (qmem->regs.status != NVME_STATUS_READY) {
+        drain_vcon();
+        usleep(10000); // 10ms
+        if (++wait_count > 1000) { // 10 seconds timeout
+            fprintf(stderr, "\n[HOST ERROR] Timeout waiting for Core 3 READY status! Did Core 3 boot?\n");
+            munmap(map_base, MAP_SIZE);
+            close(mem_fd);
+            return 1;
         }
     }
     drain_vcon();
-    printf("[HOST] Core 3 NVMe CSD Controller is READY.\n");
+    printf("--- [CORE 3 READY] ---\n\n");
+
 
     // Load and JIT Compile eBPF program
     const char *app_path = DEFAULT_APP_BIN;
