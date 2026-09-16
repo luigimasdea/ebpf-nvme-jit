@@ -78,7 +78,7 @@ static inline double get_time_ms(void) {
 // Host-Native aggregation baseline (GCC -O2 compiled)
 static void host_native_filter(const struct record *records, uint32_t count,
                                uint32_t target_type, uint32_t min_amt, uint32_t max_amt,
-                               uint32_t *out_matches, uint64_t *out_sum,
+                               uint64_t *out_matches, uint64_t *out_sum,
                                uint32_t *out_min, uint32_t *out_max) {
     uint32_t matches = 0;
     uint64_t sum = 0;
@@ -101,6 +101,7 @@ static void host_native_filter(const struct record *records, uint32_t count,
     *out_min = min_v;
     *out_max = max_v;
 }
+
 
 static volatile uint32_t *vcon_idx;
 static volatile char *vcon_buf;
@@ -365,9 +366,10 @@ int main(int argc, char *argv[]) {
         // Step 2: Host CPU executes filter & aggregation in C native
         double t_comp0 = get_time_ms();
         host_native_filter(host_buf, records_in_batch, 1, 50, 500,
-                           (uint32_t *)&host_res.matches, &host_res.sum_amount,
+                           &host_res.matches, &host_res.sum_amount,
                            &host_res.min_amount, &host_res.max_amount);
         double t_comp1 = get_time_ms();
+
         host_res.compute_time_ms += (t_comp1 - t_comp0);
 
         bytes_left -= to_read;
