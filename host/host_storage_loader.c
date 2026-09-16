@@ -223,46 +223,58 @@ int main(int argc, char *argv[]) {
     struct analytics_context *ctx_a = (struct analytics_context *)(map_base + SLM_BUF_A_OFFSET);
     struct analytics_context *ctx_b = (struct analytics_context *)(map_base + SLM_BUF_B_OFFSET);
 
-    // 1. Reset Virtual Console and NVMe Queues
-    *vcon_idx = 0;
-    memset((void *)vcon_buf, 0, VCON_SIZE - 4);
-    memset((void *)qmem, 0, sizeof(struct nvme_queue_mem));
-
-    // 2. Inject firmware binary into RAM (0x222000000)
-    printf("[HOST] Injecting generic CSD firmware into RAM (0x222000000)...\n");
-    int fw_fd = open(FW_BINARY, O_RDONLY);
-    if (fw_fd < 0) fw_fd = open("../" FW_BINARY, O_RDONLY);
-    if (fw_fd >= 0) {
-        ssize_t bytes_read = read(fw_fd, map_base, 0x100000);
-        close(fw_fd);
-        printf("[HOST] Firmware injected (%zd bytes).\n", bytes_read);
+    // Check if Core 3 is already alive and READY
+    if (qmem->regs.status == NVME_STATUS_READY) {
+        printf("[HOST] Core 3 is ALREADY alive and READY! Reusing active CSD...\n");
+        // Reset queue pointers without clearing READY status
+        qmem->regs.sq_tail = 0;
+        qmem->regs.sq_head = 0;
+        qmem->regs.cq_tail = 0;
+        qmem->regs.cq_head = 0;
+        __sync_synchronize();
     } else {
-        fprintf(stderr, "[HOST WARNING] Could not open firmware binary (%s)!\n", FW_BINARY);
-    }
+        // Core 3 is not ready: fresh boot sequence
+        *vcon_idx = 0;
+        memset((void *)vcon_buf, 0, VCON_SIZE - 4);
+        memset((void *)qmem, 0, sizeof(struct nvme_queue_mem));
 
-    // 3. Automatically kick Core 3 via kernel module
-    printf("[HOST] Kicking Core 3 via OpenSBI HSM...\n");
-    system("rmmod vf2_kick 2>/dev/null");
-    if (system("insmod tools/kick_core/vf2_kick.ko 2>/dev/null") != 0) {
-        system("insmod ../tools/kick_core/vf2_kick.ko 2>/dev/null");
-    }
-
-    printf("[HOST] Waiting for Core 3 boot... (if manual: sudo rmmod vf2_kick && sudo insmod tools/kick_core/vf2_kick.ko)\n");
-    printf("--- [CORE 3 CONSOLE] ---\n");
-
-    int wait_count = 0;
-    while (qmem->regs.status != NVME_STATUS_READY) {
-        drain_vcon();
-        usleep(10000); // 10ms
-        if (++wait_count > 1000) { // 10 seconds timeout
-            fprintf(stderr, "\n[HOST ERROR] Timeout waiting for Core 3 READY status! Did Core 3 boot?\n");
-            munmap(map_base, MAP_SIZE);
-            close(mem_fd);
-            return 1;
+        printf("[HOST] Injecting generic CSD firmware into RAM (0x222000000)...\n");
+        int fw_fd = open(FW_BINARY, O_RDONLY);
+        if (fw_fd < 0) fw_fd = open("../" FW_BINARY, O_RDONLY);
+        if (fw_fd >= 0) {
+            ssize_t bytes_read = read(fw_fd, map_base, 0x100000);
+            close(fw_fd);
+            printf("[HOST] Firmware injected (%zd bytes).\n", bytes_read);
         }
+
+        // Ensure Hart 4 is in STOPPED state by toggling online/offline if needed
+        system("sh -c 'echo 1 > /sys/devices/system/cpu/cpu3/online 2>/dev/null'");
+        system("sh -c 'echo 0 > /sys/devices/system/cpu/cpu3/online 2>/dev/null'");
+        system("rmmod vf2_kick 2>/dev/null");
+
+        printf("[HOST] Kicking Core 3 via OpenSBI HSM...\n");
+        if (system("insmod tools/kick_core/vf2_kick.ko 2>/dev/null") != 0) {
+            system("insmod ../tools/kick_core/vf2_kick.ko 2>/dev/null");
+        }
+
+        printf("[HOST] Waiting for Core 3 boot...\n");
+        printf("--- [CORE 3 CONSOLE] ---\n");
+
+        int wait_count = 0;
+        while (qmem->regs.status != NVME_STATUS_READY) {
+            drain_vcon();
+            usleep(10000); // 10ms
+            if (++wait_count > 1000) { // 10s
+                fprintf(stderr, "\n[HOST ERROR] Timeout waiting for Core 3 READY status!\n");
+                munmap(map_base, MAP_SIZE);
+                close(mem_fd);
+                return 1;
+            }
+        }
+        drain_vcon();
+        printf("--- [CORE 3 READY] ---\n\n");
     }
-    drain_vcon();
-    printf("--- [CORE 3 READY] ---\n\n");
+
 
 
     // Load and JIT Compile eBPF program
