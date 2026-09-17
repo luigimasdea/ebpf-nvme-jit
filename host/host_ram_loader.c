@@ -213,17 +213,35 @@ static int submit_nvme_cmd_silent(volatile struct nvme_queue_mem *qmem,
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("Usage: %s <dataset_file.bin> [chunk_size_KB]\n", argv[0]);
-        printf("Example: %s /mnt/nvme/dataset_1m.bin 256\n", argv[0]);
+        printf("Usage: %s <dataset_file.bin | --stream [size_MB]> [chunk_size_KB]\n", argv[0]);
+        printf("Examples:\n");
+        printf("  %s /mnt/nvme/dataset_1m.bin 256\n", argv[0]);
+        printf("  %s --stream 1024 1024   (1 GB streaming benchmark with 1024 KB chunks)\n", argv[0]);
+        printf("  %s --stream 2048 1024   (2 GB streaming benchmark with 1024 KB chunks)\n", argv[0]);
         return 1;
     }
 
-    const char *dataset_path = argv[1];
+    bool is_stream_mode = false;
+    uint64_t stream_mb = 1024;
+    const char *dataset_path = NULL;
     uint32_t chunk_kb = DEFAULT_CHUNK_KB;
 
-    if (argc >= 3) {
-        int val = atoi(argv[2]);
-        if (val > 0) chunk_kb = val;
+    if (strcmp(argv[1], "--stream") == 0 || strcmp(argv[1], "-s") == 0) {
+        is_stream_mode = true;
+        if (argc >= 3 && atoi(argv[2]) > 0) {
+            stream_mb = (uint64_t)atoi(argv[2]);
+        }
+        if (argc >= 4 && atoi(argv[3]) > 0) {
+            chunk_kb = (uint32_t)atoi(argv[3]);
+        } else {
+            chunk_kb = 1024; // Default to 1024 KB sweet spot for heavy streaming
+        }
+    } else {
+        dataset_path = argv[1];
+        if (argc >= 3) {
+            int val = atoi(argv[2]);
+            if (val > 0) chunk_kb = val;
+        }
     }
 
     if (chunk_kb < 16) chunk_kb = 16;
@@ -233,45 +251,89 @@ int main(int argc, char *argv[]) {
     uint32_t chunk_records = chunk_bytes / sizeof(struct record);
     chunk_bytes = chunk_records * sizeof(struct record);
 
-    struct stat st;
-    if (stat(dataset_path, &st) != 0) {
-        perror("Error stat dataset file");
-        return 1;
-    }
-    uint64_t file_bytes = st.st_size;
-    uint64_t total_records = file_bytes / sizeof(struct record);
+    uint64_t file_bytes = 0;
+    uint64_t total_records = 0;
+    uint64_t template_bytes = 0;
+    uint8_t *raw_dataset = NULL;
 
-    // Pre-load entire dataset into Host RAM before timing starts!
     printf("====================================================================\n");
-    printf("[ARCHITECTURAL IN-RAM CSD BENCHMARK: SIMULATED ONFI BUS PIPELINE]\n");
-    printf("====================================================================\n");
-    printf("  Dataset File      : %s\n", dataset_path);
-    printf("  Dataset Size      : %.2f MB (%lu bytes, %lu records)\n",
-           (double)file_bytes / (1024.0 * 1024.0), (unsigned long)file_bytes, (unsigned long)total_records);
-    printf("  Streaming Chunk   : %u KB (%u records / chunk)\n", chunk_kb, chunk_records);
-    printf("  Internal Bus Sim  : Memory DMA memcpy (~80 µs / chunk, mirrors ONFI 5.0)\n");
-    printf("  Pre-loading dataset into RAM... ");
-    fflush(stdout);
-
-    int disk_fd = open(dataset_path, O_RDONLY);
-    if (disk_fd < 0) {
-        perror("open dataset");
-        return 1;
+    if (is_stream_mode) {
+        printf("[ARCHITECTURAL IN-RAM CSD HEAVY STREAMING BENCHMARK (ONFI MODEL)]\n");
+    } else {
+        printf("[ARCHITECTURAL IN-RAM CSD BENCHMARK: SIMULATED ONFI BUS PIPELINE]\n");
     }
-    uint8_t *raw_dataset = malloc(file_bytes);
-    if (!raw_dataset) {
-        fprintf(stderr, "Out of memory allocating %lu bytes\n", (unsigned long)file_bytes);
+    printf("====================================================================\n");
+
+    if (is_stream_mode) {
+        file_bytes = stream_mb * 1024ULL * 1024ULL;
+        total_records = file_bytes / sizeof(struct record);
+        template_bytes = (file_bytes < 16 * 1024 * 1024ULL) ? file_bytes : (16 * 1024 * 1024ULL);
+        if (template_bytes < chunk_bytes) template_bytes = chunk_bytes;
+
+        printf("  Streaming Target  : %lu MB (%.2f GB, %lu records)\n",
+               (unsigned long)stream_mb, (double)file_bytes / (1024.0 * 1024.0 * 1024.0), (unsigned long)total_records);
+        printf("  Streaming Chunk   : %u KB (%u records / chunk, %lu total chunks)\n",
+               chunk_kb, chunk_records, (unsigned long)(file_bytes / chunk_bytes));
+        printf("  RAM Memory Mode   : Zero-Disk Circular Streaming Pattern (Template: %.2f MB)\n",
+               (double)template_bytes / (1024.0 * 1024.0));
+        printf("  Internal Bus Sim  : Memory DMA memcpy (~80 µs / chunk, mirrors ONFI 5.0)\n");
+        printf("  Generating synthetic template pattern in RAM... ");
+        fflush(stdout);
+
+        raw_dataset = malloc(template_bytes);
+        if (!raw_dataset) {
+            fprintf(stderr, "Out of memory allocating %lu bytes template\n", (unsigned long)template_bytes);
+            return 1;
+        }
+        uint32_t template_records = template_bytes / sizeof(struct record);
+        struct record *rec_buf = (struct record *)raw_dataset;
+        uint32_t seed = 42;
+        #define FAST_RAND() (seed = seed * 1664525u + 1013904223u)
+        for (uint32_t i = 0; i < template_records; i++) {
+            rec_buf[i].id = i + 1;
+            rec_buf[i].type = (FAST_RAND() % 3) + 1;
+            rec_buf[i].amount = (FAST_RAND() % 1000) + 1;
+            rec_buf[i].timestamp = 1700000000 + (FAST_RAND() % 86400);
+        }
+        printf("Done (Deterministic LCG pattern ready).\n");
+    } else {
+        struct stat st;
+        if (stat(dataset_path, &st) != 0) {
+            perror("Error stat dataset file");
+            return 1;
+        }
+        file_bytes = st.st_size;
+        total_records = file_bytes / sizeof(struct record);
+        template_bytes = file_bytes;
+
+        printf("  Dataset File      : %s\n", dataset_path);
+        printf("  Dataset Size      : %.2f MB (%lu bytes, %lu records)\n",
+               (double)file_bytes / (1024.0 * 1024.0), (unsigned long)file_bytes, (unsigned long)total_records);
+        printf("  Streaming Chunk   : %u KB (%u records / chunk)\n", chunk_kb, chunk_records);
+        printf("  Internal Bus Sim  : Memory DMA memcpy (~80 µs / chunk, mirrors ONFI 5.0)\n");
+        printf("  Pre-loading dataset into RAM... ");
+        fflush(stdout);
+
+        int disk_fd = open(dataset_path, O_RDONLY);
+        if (disk_fd < 0) {
+            perror("open dataset");
+            return 1;
+        }
+        raw_dataset = malloc(file_bytes);
+        if (!raw_dataset) {
+            fprintf(stderr, "Out of memory allocating %lu bytes\n", (unsigned long)file_bytes);
+            close(disk_fd);
+            return 1;
+        }
+        ssize_t total_rd = 0;
+        while ((uint64_t)total_rd < file_bytes) {
+            ssize_t rd = read(disk_fd, raw_dataset + total_rd, file_bytes - total_rd);
+            if (rd <= 0) break;
+            total_rd += rd;
+        }
         close(disk_fd);
-        return 1;
+        printf("Done (%zd bytes in Host RAM).\n", total_rd);
     }
-    ssize_t total_rd = 0;
-    while ((uint64_t)total_rd < file_bytes) {
-        ssize_t rd = read(disk_fd, raw_dataset + total_rd, file_bytes - total_rd);
-        if (rd <= 0) break;
-        total_rd += rd;
-    }
-    close(disk_fd);
-    printf("Done (%zd bytes in Host RAM).\n", total_rd);
     printf("====================================================================\n\n");
 
     const uint32_t QUERY_TYPE = 1;       // SALE
@@ -403,9 +465,10 @@ int main(int argc, char *argv[]) {
            (t_act_end - t_act_start) * 1000.0, cqe.rsvd1);
 
     // Destination memory for filtered query results
-    struct record *host_matched_records = malloc(total_records * sizeof(struct record));
-    struct record *csd_matched_records = malloc(total_records * sizeof(struct record));
-    struct record *pipe_matched_records = malloc(total_records * sizeof(struct record));
+    size_t match_alloc = (total_records <= 2000000) ? (total_records * sizeof(struct record)) : (chunk_bytes * 2);
+    struct record *host_matched_records = malloc(match_alloc);
+    struct record *csd_matched_records = malloc(match_alloc);
+    struct record *pipe_matched_records = malloc(match_alloc);
 
     // =========================================================================
     // EXPERIMENT 1: HOST-CENTRIC IN-RAM BASELINE (Direct Memory Access)
@@ -426,15 +489,17 @@ int main(int argc, char *argv[]) {
         uint32_t to_read = (bytes_left > chunk_bytes) ? chunk_bytes : (uint32_t)bytes_left;
         uint32_t records_in_batch = to_read / sizeof(struct record);
 
-        const struct record *chunk_ptr = (const struct record *)(raw_dataset + file_offset);
+        uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
+        const struct record *chunk_ptr = (const struct record *)(raw_dataset + template_offset);
 
         // Host CPU executes filter, compaction, discount & hashing in C native
         uint32_t batch_matches = 0;
+        struct record *dst_rec = (total_records <= 2000000) ? (host_matched_records + host_res.matches) : host_matched_records;
         double t_comp0 = get_time_ms();
         host_native_advanced_filter(chunk_ptr, records_in_batch,
                                    QUERY_TYPE, QUERY_MIN_AMT, QUERY_MAX_AMT,
                                    QUERY_MIN_TS, QUERY_MAX_TS, QUERY_DISC_PCT,
-                                   host_matched_records + host_res.matches,
+                                   dst_rec,
                                    &batch_matches,
                                    &host_res.sum_amount, &host_res.net_discount_sum,
                                    &host_res.min_amount, &host_res.max_amount,
@@ -482,8 +547,9 @@ int main(int argc, char *argv[]) {
         uint32_t records_in_batch = to_read / sizeof(struct record);
 
         // Step 1: Internal Flash DMA into CSD SLM Buffer A (Simulated ONFI transfer)
+        uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
         double t_io0 = get_time_ms();
-        memcpy(ctx_a->records, raw_dataset + file_offset, to_read);
+        memcpy(ctx_a->records, raw_dataset + template_offset, to_read);
         double t_io1 = get_time_ms();
         csd_res.io_time_ms += (t_io1 - t_io0);
 
@@ -515,7 +581,8 @@ int main(int argc, char *argv[]) {
         // Step 4: Host transfers ONLY the in-place compacted matched records!
         uint32_t batch_matches = cqe.cdw0;
         if (batch_matches > 0) {
-            memcpy(csd_matched_records + csd_res.matches, (void *)ctx_a->records, batch_matches * sizeof(struct record));
+            void *dst = (total_records <= 2000000) ? (void *)(csd_matched_records + csd_res.matches) : (void *)csd_matched_records;
+            memcpy(dst, (void *)ctx_a->records, batch_matches * sizeof(struct record));
             csd_res.host_mem_traffic_bytes += (batch_matches * sizeof(struct record));
         }
 
@@ -578,7 +645,8 @@ int main(int argc, char *argv[]) {
 
         // Step 1: Transfer next chunk from RAM into idle buffer while Core 3 processes active buffer
         if (bytes_left > 0) {
-            memcpy(fill_ctx->records, raw_dataset + file_offset, to_read);
+            uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
+            memcpy(fill_ctx->records, raw_dataset + template_offset, to_read);
             fill_ctx->record_count = records_in_batch;
             fill_ctx->target_type = QUERY_TYPE;
             fill_ctx->min_amount = QUERY_MIN_AMT;
@@ -605,7 +673,8 @@ int main(int argc, char *argv[]) {
 
                         uint32_t batch_matches = cqe_p.cdw0;
                         if (batch_matches > 0) {
-                            memcpy(pipe_matched_records + pipe_res.matches, (void *)exec_ctx->records, batch_matches * sizeof(struct record));
+                            void *dst = (total_records <= 2000000) ? (void *)(pipe_matched_records + pipe_res.matches) : (void *)pipe_matched_records;
+                            memcpy(dst, (void *)exec_ctx->records, batch_matches * sizeof(struct record));
                             pipe_res.host_mem_traffic_bytes += (batch_matches * sizeof(struct record));
                         }
 
@@ -707,7 +776,9 @@ int main(int argc, char *argv[]) {
 
     if (match) {
         printf("  [VERIFICATION] SUCCESS: All 3 execution modes yielded 100%% identical results!\n");
-        printf("  Compacted Records Verified: %lu records perfectly preserved across SLM compaction.\n", host_res.matches);
+        printf("  Scale Verified: %lu records (%.2f MB / %.2f GB) with %lu matches.\n",
+               (unsigned long)total_records, (double)file_bytes / (1024.0 * 1024.0),
+               (double)file_bytes / (1024.0 * 1024.0 * 1024.0), (unsigned long)host_res.matches);
     } else {
         printf("  [VERIFICATION] WARNING: Results mismatch detected!\n");
     }
