@@ -739,8 +739,11 @@ int main(int argc, char *argv[]) {
     double lat_reduct = (1.0 - (pipe_res.total_time_ms / host_res.total_time_ms)) * 100.0;
     double data_reduction_pct = (1.0 - ((double)csd_res.host_mem_traffic_bytes / (double)file_bytes)) * 100.0;
 
-    // Measured Host PCIe Storage Baseline (114.85 ms I/O + Host Compute)
-    double host_storage_baseline_ms = 114.85 + host_res.compute_time_ms;
+    // Measured Host PCIe Storage Baseline:
+    // Sustained ext4/PCIe pread rate on VisionFive 2 is ~132.86 MB/s (114.85 ms for 15.26 MB)
+    double host_pcie_rate_mb_s = 132.86;
+    double host_storage_io_ms = ((double)file_bytes / (1024.0 * 1024.0)) / (host_pcie_rate_mb_s / 1000.0);
+    double host_storage_baseline_ms = host_storage_io_ms + host_res.compute_time_ms;
     double true_csd_speedup = host_storage_baseline_ms / pipe_res.total_time_ms;
 
     printf("====================================================================\n");
