@@ -115,7 +115,7 @@ static void host_native_advanced_filter(const struct record *records, uint32_t c
     uint64_t net_sum = 0;
     uint32_t max_v = *out_max;
     uint32_t min_v = *out_min;
-    uint32_t hash = *out_hash;
+    uint32_t hash = 0x811C9DC5; // FNV-1a 32-bit offset basis per chunk, matching eBPF exactly
     uint32_t multiplier = (disc_pct < 100) ? (100 - disc_pct) : 100;
 
     for (uint32_t i = 0; i < count; i++) {
@@ -148,11 +148,11 @@ static void host_native_advanced_filter(const struct record *records, uint32_t c
     }
 
     *out_match_count = matches;
-    *out_sum = sum;
-    *out_net_sum = net_sum;
+    *out_sum += sum;
+    *out_net_sum += net_sum;
     *out_min = min_v;
     *out_max = max_v;
-    *out_hash = hash;
+    *out_hash ^= hash;
 }
 
 static volatile uint32_t *vcon_idx = NULL;
