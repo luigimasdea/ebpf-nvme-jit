@@ -124,7 +124,7 @@ static void host_native_advanced_filter(const struct record *records, uint32_t c
         uint32_t r_amt = records[i].amount;
         uint32_t r_ts = records[i].timestamp;
 
-        if (r_type == target_type &&
+        if ((target_type == 0 || r_type == target_type) &&
             r_amt >= min_amt && r_amt <= max_amt &&
             r_ts >= min_ts && r_ts <= max_ts) {
 
@@ -225,6 +225,7 @@ int main(int argc, char *argv[]) {
     uint64_t stream_mb = 1024;
     const char *dataset_path = NULL;
     uint32_t chunk_kb = DEFAULT_CHUNK_KB;
+    uint32_t sel_pct = 3;
 
     if (strcmp(argv[1], "--stream") == 0 || strcmp(argv[1], "-s") == 0) {
         is_stream_mode = true;
@@ -236,11 +237,17 @@ int main(int argc, char *argv[]) {
         } else {
             chunk_kb = 1024; // Default to 1024 KB sweet spot for heavy streaming
         }
+        if (argc >= 5 && atoi(argv[4]) > 0) {
+            sel_pct = (uint32_t)atoi(argv[4]);
+        }
     } else {
         dataset_path = argv[1];
         if (argc >= 3) {
             int val = atoi(argv[2]);
             if (val > 0) chunk_kb = val;
+        }
+        if (argc >= 4 && atoi(argv[3]) > 0) {
+            sel_pct = (uint32_t)atoi(argv[3]);
         }
     }
 
@@ -336,12 +343,31 @@ int main(int argc, char *argv[]) {
     }
     printf("====================================================================\n\n");
 
-    const uint32_t QUERY_TYPE = 1;       // SALE
-    const uint32_t QUERY_MIN_AMT = 50;   // Selective window [50, 150]
-    const uint32_t QUERY_MAX_AMT = 150;
-    const uint32_t QUERY_MIN_TS = 0;
-    const uint32_t QUERY_MAX_TS = 0xFFFFFFFF;
-    const uint32_t QUERY_DISC_PCT = 15; // 15% discount
+    uint32_t QUERY_TYPE = 1;       // SALE
+    uint32_t QUERY_MIN_AMT = 50;   // Selective window [50, 150]
+    uint32_t QUERY_MAX_AMT = 150;
+    uint32_t QUERY_MIN_TS = 0;
+    uint32_t QUERY_MAX_TS = 0xFFFFFFFF;
+    uint32_t QUERY_DISC_PCT = 15; // 15% discount
+
+    if (sel_pct == 3) {
+        QUERY_TYPE = 1; QUERY_MIN_AMT = 50; QUERY_MAX_AMT = 150; // ~3.37%
+    } else if (sel_pct <= 10) {
+        QUERY_TYPE = 1; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 300;  // ~10.0%
+    } else if (sel_pct <= 25) {
+        QUERY_TYPE = 1; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 750;  // ~25.0%
+    } else if (sel_pct <= 33) {
+        QUERY_TYPE = 1; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 1000; // ~33.3%
+    } else if (sel_pct <= 50) {
+        QUERY_TYPE = 0; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 500;  // ~50.0% (wildcard type)
+    } else if (sel_pct <= 75) {
+        QUERY_TYPE = 0; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 750;  // ~75.0% (wildcard type)
+    } else {
+        QUERY_TYPE = 0; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 1000; // ~100.0% (wildcard type, all pass)
+    }
+
+    printf("  [QUERY CONFIG] Selectivity: ~%u%% | Type: %s | Amount Range: [%u, %u]\n\n",
+           sel_pct, (QUERY_TYPE == 0) ? "ANY (Wildcard)" : "SALE (Type 1)", QUERY_MIN_AMT, QUERY_MAX_AMT);
 
     // Open physical memory mapping to CSD
     int mem_fd = open("/dev/mem", O_RDWR | O_SYNC);

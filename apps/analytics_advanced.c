@@ -62,8 +62,8 @@ uint64_t app_entry(struct advanced_context *ctx) {
         uint32_t r_amt = ctx->records[i].amount;
         uint32_t r_ts = ctx->records[i].timestamp;
 
-        // Multi-attribute predicate (Type, Amount Range, Timestamp Range)
-        if (r_type == target_type &&
+        // Multi-attribute predicate (Type with 0=ANY wildcard, Amount Range, Timestamp Range)
+        if ((target_type == 0 || r_type == target_type) &&
             r_amt >= min_amt && r_amt <= max_amt &&
             r_ts >= min_ts && r_ts <= max_ts) {
 
