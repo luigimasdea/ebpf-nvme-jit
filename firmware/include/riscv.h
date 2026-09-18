@@ -31,6 +31,21 @@
 #define RV_REG_S2   18
 #define RV_REG_S3   19
 #define RV_REG_S4   20
+#define RV_REG_S5   21
+#define RV_REG_S6   22
+#define RV_REG_S7   23
+#define RV_REG_S8   24
+#define RV_REG_S9   25
+#define RV_REG_S10  26
+#define RV_REG_S11  27
+
+// Additional arguments and temporary registers
+#define RV_REG_A6   16
+#define RV_REG_A7   17
+#define RV_REG_T3   28
+#define RV_REG_T4   29
+#define RV_REG_T5   30
+#define RV_REG_T6   31
 
 
 /* =========================================================================

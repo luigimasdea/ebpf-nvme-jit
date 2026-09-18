@@ -21,4 +21,14 @@ void compile_ebpf(struct ebpf_inst *prog, int len);
  */
 uint64_t run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx);
 
+/**
+ * Configure executable buffer pointer (useful for test harnesses outside of fixed physical addresses).
+ */
+void jit_set_memory_target(uint32_t *target);
+
+/**
+ * Returns the number of eBPF stack slots currently cached in RISC-V hardware registers.
+ */
+int jit_get_cached_slots_count(void);
+
 #endif // JIT_H

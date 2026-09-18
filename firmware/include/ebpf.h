@@ -108,4 +108,19 @@ struct ebpf_inst {
 // Corresponds to (BPF_LD | BPF_DW | BPF_IMM)
 #define BPF_LD_IMM64 0x18 
 
+/* =========================================================================
+ * eBPF REGISTER NUMBERS
+ * ========================================================================= */
+#define BPF_REG_0   0
+#define BPF_REG_1   1
+#define BPF_REG_2   2
+#define BPF_REG_3   3
+#define BPF_REG_4   4
+#define BPF_REG_5   5
+#define BPF_REG_6   6
+#define BPF_REG_7   7
+#define BPF_REG_8   8
+#define BPF_REG_9   9
+#define BPF_REG_10  10  // Read-only stack frame pointer
+
 #endif // EBPF_H

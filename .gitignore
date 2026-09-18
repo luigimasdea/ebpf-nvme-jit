@@ -15,8 +15,9 @@ host/host_storage_loader
 host/host_advanced_loader
 host/host_ram_loader
 tools/generate_dataset
+tools/test_jit_caching
+*.core
 *.csv
-
 
 .gdb_history
 .cache

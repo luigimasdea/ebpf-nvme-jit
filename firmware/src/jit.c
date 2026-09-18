@@ -19,7 +19,80 @@ static const uint8_t bpf2rv[11] = {
     RV_REG_FP  // eBPF R10 -> RISC-V fp (Stack Frame Pointer - Read Only)
 };
 
+/* =========================================================================
+ * REGISTER CACHING FOR eBPF STACK SLOTS (r10 - offset)
+ * =========================================================================
+ * eBPF only has 10 GPRs (r0-r9) plus r10 (frame pointer).
+ * When Clang compiles programs with high register pressure (> 10 variables),
+ * it spills variables to stack slots: *(u32/u64 *)(r10 - offset).
+ * RISC-V RV64I has 32 physical registers (x0-x31). We map these spilled slots
+ * directly into unused physical RISC-V registers:
+ *   - Callee-saved: s5-s11 (7 registers)
+ *   - Caller-saved / temporaries: t3-t6, a6-a7 (6 registers)
+ * Total: 13 dedicated physical registers for stack caching.
+ * ========================================================================= */
+static const uint8_t cache_regs[] = {
+    RV_REG_S5,  RV_REG_S6,  RV_REG_S7,  RV_REG_S8,
+    RV_REG_S9,  RV_REG_S10, RV_REG_S11,
+    RV_REG_T3,  RV_REG_T4,  RV_REG_T5,  RV_REG_T6,
+    RV_REG_A6,  RV_REG_A7
+};
+#define NUM_CACHE_REGS (sizeof(cache_regs) / sizeof(cache_regs[0]))
+
+struct stack_cache_slot {
+    int16_t offset;
+    uint8_t rv_reg;
+    bool is_used;
+};
+
+static struct stack_cache_slot stack_cache[NUM_CACHE_REGS];
+static int num_cached_slots = 0;
+static bool stack_pointer_escaped = false;
+
+static void reset_stack_cache(void) {
+    num_cached_slots = 0;
+    stack_pointer_escaped = false;
+    for (int i = 0; i < (int)NUM_CACHE_REGS; i++) {
+        stack_cache[i].offset = 0;
+        stack_cache[i].rv_reg = 0;
+        stack_cache[i].is_used = false;
+    }
+}
+
+static int find_cache_slot(int16_t offset) {
+    if (stack_pointer_escaped) return -1;
+    for (int i = 0; i < num_cached_slots; i++) {
+        if (stack_cache[i].is_used && stack_cache[i].offset == offset) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int get_or_alloc_cache_slot(int16_t offset) {
+    if (stack_pointer_escaped) return -1;
+    int idx = find_cache_slot(offset);
+    if (idx >= 0) return idx;
+
+    if (num_cached_slots < (int)NUM_CACHE_REGS) {
+        idx = num_cached_slots++;
+        stack_cache[idx].offset = offset;
+        stack_cache[idx].rv_reg = cache_regs[idx];
+        stack_cache[idx].is_used = true;
+        return idx;
+    }
+    return -1; // Fallback to RAM stack if more than 13 slots are used
+}
+
+int jit_get_cached_slots_count(void) {
+    return num_cached_slots;
+}
+
 static uint32_t *jit_memory = (uint32_t *)0x222200000ULL;
+
+void jit_set_memory_target(uint32_t *target) {
+    jit_memory = target;
+}
 static int pc_riscv = 0;
 
 // Offset Map: Stores the starting RISC-V instruction index for each eBPF instruction
@@ -72,8 +145,11 @@ static void emit_alu(struct ebpf_inst inst, uint8_t rd, uint8_t rs, uint8_t f3, 
     }
   }
 
-  uint8_t op_imm = is_alu64 ? RV_OP_IMM : RV_OP_IMM_32;
-  uint8_t op_alu = is_alu64 ? RV_OP_ALU : RV_OP_ALU_32;
+  // RISC-V RV64 lacks 32-bit non-widening bitwise operations (ANDW, ORW, XORW, ANDIW, etc.)
+  // Bitwise operations on lower 32 bits are identical in 64-bit; zero-extension is applied below.
+  bool is_bitwise = (f3 == RV_F3_AND || f3 == RV_F3_OR || f3 == RV_F3_XOR);
+  uint8_t op_imm = (is_alu64 || is_bitwise) ? RV_OP_IMM : RV_OP_IMM_32;
+  uint8_t op_alu = (is_alu64 || is_bitwise) ? RV_OP_ALU : RV_OP_ALU_32;
 
   // 2. Clear, Linear Hardware Pathing
   if (!use_imm) {
@@ -219,6 +295,34 @@ static void emit_ldx(struct ebpf_inst inst) {
     default: return;
   }
 
+  // Register Caching for stack slots (r10 - offset)
+  if (inst.src_reg == BPF_REG_10) {
+    int slot = (current_pass == PASS_ANALYZE) ?
+               get_or_alloc_cache_slot(inst.offset) :
+               find_cache_slot(inst.offset);
+    if (slot >= 0) {
+      uint8_t creg = stack_cache[slot].rv_reg;
+      switch (BPF_SIZE(op)) {
+        case BPF_DW:
+          // 64-bit load: mv rd, creg
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_ADD, creg, 0));
+          return;
+        case BPF_W:
+          // 32-bit load (zero-extended)
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SLL, creg, 32));
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 32));
+          return;
+        case BPF_H:
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SLL, creg, 48));
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 48));
+          return;
+        case BPF_B:
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_AND, creg, 0xFF));
+          return;
+      }
+    }
+  }
+
   emit_rv32(RV_MAKE_I(RV_OP_LOAD, rd, f3, rs, inst.offset));
 }
 
@@ -236,6 +340,34 @@ static void emit_stx(struct ebpf_inst inst) {
     default: return;
   }
 
+  // Register Caching for stack slots (r10 - offset)
+  if (inst.dst_reg == BPF_REG_10) {
+    int slot = (current_pass == PASS_ANALYZE) ?
+               get_or_alloc_cache_slot(inst.offset) :
+               find_cache_slot(inst.offset);
+    if (slot >= 0) {
+      uint8_t creg = stack_cache[slot].rv_reg;
+      switch (BPF_SIZE(op)) {
+        case BPF_DW:
+          // 64-bit store: mv creg, rs
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_ADD, rs, 0));
+          return;
+        case BPF_W:
+          // 32-bit store: zero-extend into creg
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_SLL, rs, 32));
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_SRL, creg, 32));
+          return;
+        case BPF_H:
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_SLL, rs, 48));
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_SRL, creg, 48));
+          return;
+        case BPF_B:
+          emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_AND, rs, 0xFF));
+          return;
+      }
+    }
+  }
+
   emit_rv32(RV_MAKE_S(RV_OP_STORE, f3, rd, rs, inst.offset));
 }
 
@@ -250,6 +382,22 @@ static void emit_st(struct ebpf_inst inst) {
     case BPF_W:  f3 = RV_F3_SW; break;
     case BPF_DW: f3 = RV_F3_SD; break;
     default: return;
+  }
+
+  // Register Caching for stack slots (r10 - offset)
+  if (inst.dst_reg == BPF_REG_10) {
+    int slot = (current_pass == PASS_ANALYZE) ?
+               get_or_alloc_cache_slot(inst.offset) :
+               find_cache_slot(inst.offset);
+    if (slot >= 0) {
+      uint8_t creg = stack_cache[slot].rv_reg;
+      emit_load_imm(creg, inst.imm);
+      if (BPF_SIZE(op) == BPF_W) {
+        emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_SLL, creg, 32));
+        emit_rv32(RV_MAKE_I(RV_OP_IMM, creg, RV_F3_SRL, creg, 32));
+      }
+      return;
+    }
   }
 
   // Load immediate to T0 first
@@ -409,6 +557,10 @@ static void emit_alu_op(struct ebpf_inst inst) {
     else {
       emit_rv32(RV_MAKE_I(is_alu64 ? RV_OP_IMM : RV_OP_IMM_32, rd, RV_F3_ADD, rs, 0));
     }
+    if (!is_alu64 && rd != RV_REG_ZERO) {
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SLL, rd, 32));
+      emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 32));
+    }
     break;
   case BPF_NEG:
     emit_rv32(RV_MAKE_R(is_alu64 ? RV_OP_ALU : RV_OP_ALU_32, rd, RV_F3_ADD, RV_REG_ZERO, rd, RV_F7_SUB));
@@ -423,18 +575,26 @@ static void emit_alu_op(struct ebpf_inst inst) {
  * CORE INSTRUCTION EMITTER
  * ========================================================================= */
 static void emit_prologue() {
-  // Save ra, s0-s4. Allocate 512 bytes for eBPF stack.
-  // Total stack frame: 512 (ebpf) + 64 (saved regs + padding) = 576 bytes
-  // sp must be 16-byte aligned. 576 is 16*36.
-  emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_SP, RV_F3_ADD, RV_REG_SP, -576));
-  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_RA, 568));
-  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_FP, 560));
-  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S1, 552));
-  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S2, 544));
-  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S3, 536));
-  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S4, 528));
+  // Save ra, fp, s1-s11. Allocate 512 bytes for eBPF stack.
+  // 13 callee-saved registers * 8 bytes = 104 bytes.
+  // Total stack frame: 512 (ebpf) + 104 (saved regs) + 8 (alignment) = 624 bytes.
+  // sp must be 16-byte aligned. 624 is 16*39.
+  emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_SP, RV_F3_ADD, RV_REG_SP, -624));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_RA,  616));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_FP,  608));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S1,  600));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S2,  592));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S3,  584));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S4,  576));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S5,  568));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S6,  560));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S7,  552));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S8,  544));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S9,  536));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S10, 528));
+  emit_rv32(RV_MAKE_S(RV_OP_STORE, RV_F3_SD, RV_REG_SP, RV_REG_S11, 520));
   
-  // Set R10 (s0) to the top of the eBPF stack (sp + 512)
+  // Set R10 (s0/fp) to the top of the eBPF stack (sp + 512)
   emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_FP, RV_F3_ADD, RV_REG_SP, 512));
 
   // Move context from a0 (C first argument) to a1 (eBPF R1)
@@ -442,13 +602,20 @@ static void emit_prologue() {
 }
 
 static void emit_epilogue() {
-  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_RA, RV_F3_LD, RV_REG_SP, 568));
-  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_FP, RV_F3_LD, RV_REG_SP, 560));
-  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S1, RV_F3_LD, RV_REG_SP, 552));
-  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S2, RV_F3_LD, RV_REG_SP, 544));
-  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S3, RV_F3_LD, RV_REG_SP, 536));
-  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S4, RV_F3_LD, RV_REG_SP, 528));
-  emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_SP, RV_F3_ADD, RV_REG_SP, 576));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_RA,  RV_F3_LD, RV_REG_SP, 616));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_FP,  RV_F3_LD, RV_REG_SP, 608));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S1,  RV_F3_LD, RV_REG_SP, 600));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S2,  RV_F3_LD, RV_REG_SP, 592));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S3,  RV_F3_LD, RV_REG_SP, 584));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S4,  RV_F3_LD, RV_REG_SP, 576));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S5,  RV_F3_LD, RV_REG_SP, 568));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S6,  RV_F3_LD, RV_REG_SP, 560));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S7,  RV_F3_LD, RV_REG_SP, 552));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S8,  RV_F3_LD, RV_REG_SP, 544));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S9,  RV_F3_LD, RV_REG_SP, 536));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S10, RV_F3_LD, RV_REG_SP, 528));
+  emit_rv32(RV_MAKE_I(RV_OP_LOAD, RV_REG_S11, RV_F3_LD, RV_REG_SP, 520));
+  emit_rv32(RV_MAKE_I(RV_OP_IMM,  RV_REG_SP,  RV_F3_ADD, RV_REG_SP, 624));
   emit_rv32(RV_INST_RET);
 }
 
@@ -507,6 +674,7 @@ static void generate_insn(struct ebpf_inst inst, struct ebpf_inst next, int i) {
         emit_epilogue();
         break;
       }
+      /* fallthrough */
     case BPF_JMP32:
       emit_jmp(inst, i + 1 + inst.offset);
       break;
@@ -536,7 +704,23 @@ static void generate_insn(struct ebpf_inst inst, struct ebpf_inst next, int i) {
  * MAIN COMPILER ENTRY POINT
  * ========================================================================= */
 void compile_ebpf(struct ebpf_inst *prog, int len) {
-  // Pass 1: Analysis (Calculate offsets)
+  // Pre-analysis: Initialize register caching for spilled stack slots
+  reset_stack_cache();
+  for (int i = 0; i < len; i++) {
+    struct ebpf_inst inst = prog[i];
+    uint8_t op = inst.opcode;
+    uint8_t cls = BPF_CLASS(op);
+
+    // If r10 is used in any non-memory context, pointer has escaped
+    if (inst.src_reg == BPF_REG_10 && cls != BPF_LDX && cls != BPF_STX) {
+      stack_pointer_escaped = true;
+    }
+    if (inst.dst_reg == BPF_REG_10 && cls != BPF_STX && cls != BPF_ST) {
+      stack_pointer_escaped = true;
+    }
+  }
+
+  // Pass 1: Analysis (Calculate offsets and allocate cache slots)
   current_pass = PASS_ANALYZE;
   pc_riscv = 0;
 
