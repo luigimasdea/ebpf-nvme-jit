@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #include "../firmware/include/ebpf.h"
 #include "../firmware/include/jit.h"
@@ -132,9 +133,20 @@ static bool test_advanced_caching(void *jit_buf, size_t mem_size) {
     compile_ebpf(prog, num_inst);
 
     int cached_count = jit_get_cached_slots_count();
+    int emitted_insns = jit_get_emitted_insn_count();
     printf(">>> Register Caching Active: %d stack slots mapped to RISC-V registers (s5-s11, t3-t6, a6-a7)!\n", cached_count);
+    printf(">>> Emitted RISC-V instructions: %d (%d bytes)\n", emitted_insns, emitted_insns * 4);
     if (cached_count != 13) {
         printf("WARNING: Expected 13 cached slots, found %d!\n", cached_count);
+    }
+
+    // Save generated machine code for disassembly inspection
+    mkdir("build", 0755);
+    FILE *dump_fp = fopen("build/jit_advanced.bin", "wb");
+    if (dump_fp) {
+        fwrite(jit_buf, 4, emitted_insns, dump_fp);
+        fclose(dump_fp);
+        printf(">>> Saved machine code to 'build/jit_advanced.bin'\n");
     }
 
     const uint32_t num_records = 5000;
@@ -263,7 +275,17 @@ static bool test_standard_analytics(void *jit_buf, size_t mem_size) {
     compile_ebpf(prog, num_inst);
 
     int cached_count = jit_get_cached_slots_count();
-    printf(">>> Register Caching Status: %d stack slots cached (expected 0 for standard query)\n", cached_count);
+    int emitted_insns = jit_get_emitted_insn_count();
+    printf(">>> Register Caching Status: %d stack slots cached\n", cached_count);
+    printf(">>> Emitted RISC-V instructions: %d (%d bytes)\n", emitted_insns, emitted_insns * 4);
+
+    mkdir("build", 0755);
+    FILE *dump_fp = fopen("build/jit_standard.bin", "wb");
+    if (dump_fp) {
+        fwrite(jit_buf, 4, emitted_insns, dump_fp);
+        fclose(dump_fp);
+        printf(">>> Saved machine code to 'build/jit_standard.bin'\n");
+    }
 
     const uint32_t num_records = 2000;
     size_t ctx_size = sizeof(struct analytics_context) + num_records * sizeof(struct record);

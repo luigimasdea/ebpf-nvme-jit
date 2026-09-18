@@ -31,4 +31,9 @@ void jit_set_memory_target(uint32_t *target);
  */
 int jit_get_cached_slots_count(void);
 
+/**
+ * Returns the number of RISC-V 32-bit instructions emitted in the last JIT compilation.
+ */
+int jit_get_emitted_insn_count(void);
+
 #endif // JIT_H

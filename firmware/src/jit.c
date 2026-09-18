@@ -84,8 +84,14 @@ static int get_or_alloc_cache_slot(int16_t offset) {
     return -1; // Fallback to RAM stack if more than 13 slots are used
 }
 
+static int pc_riscv = 0;
+
 int jit_get_cached_slots_count(void) {
     return num_cached_slots;
+}
+
+int jit_get_emitted_insn_count(void) {
+    return pc_riscv;
 }
 
 static uint32_t *jit_memory = (uint32_t *)0x222200000ULL;
@@ -93,7 +99,6 @@ static uint32_t *jit_memory = (uint32_t *)0x222200000ULL;
 void jit_set_memory_target(uint32_t *target) {
     jit_memory = target;
 }
-static int pc_riscv = 0;
 
 // Offset Map: Stores the starting RISC-V instruction index for each eBPF instruction
 static uint32_t insn_offsets[512];
