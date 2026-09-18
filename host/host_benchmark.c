@@ -9,9 +9,27 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <math.h>
 
 #include "nvme_spec.h"
 #include "nvme_queue.h"
+
+static inline double calc_mean(const double *arr, int n) {
+    if (n <= 0) return 0.0;
+    double sum = 0.0;
+    for (int i = 0; i < n; i++) sum += arr[i];
+    return sum / n;
+}
+
+static inline double calc_std(const double *arr, int n, double mean) {
+    if (n <= 1) return 0.0;
+    double sum_sq = 0.0;
+    for (int i = 0; i < n; i++) {
+        double d = arr[i] - mean;
+        sum_sq += d * d;
+    }
+    return sqrt(sum_sq / (n - 1));
+}
 
 #define PHYS_BASE           0x222000000ULL
 #define MAP_SIZE            0x01000000ULL  // 16MB
@@ -238,32 +256,48 @@ int main(int argc, char *argv[]) {
     struct nvme_sqe sqe = {0};
     struct nvme_cqe cqe = {0};
     uint16_t cid = 1;
+    int ctrl_runs = 20;
 
-    // --- MEASUREMENT 1: LOAD Command Latency ---
-    memset(&sqe, 0, sizeof(sqe));
-    sqe.opcode = NVME_CMD_EBPF_LOAD;
-    sqe.flags = NVME_FLAG_SILENT;
-    sqe.cid = cid++;
-    sqe.prp1 = SLM_PROG_PHYS_ADDR;
-    sqe.cdw10 = num_inst;
+    // --- MEASUREMENT 1: LOAD Command Latency (Sampled over 20 runs) ---
+    double load_times[ctrl_runs];
+    for (int i = 0; i < ctrl_runs; i++) {
+        memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = NVME_CMD_EBPF_LOAD;
+        sqe.flags = NVME_FLAG_SILENT;
+        sqe.cid = cid++;
+        sqe.prp1 = SLM_PROG_PHYS_ADDR;
+        sqe.cdw10 = num_inst;
 
-    double t_load_start = get_time_us();
-    bench_submit_poll(qmem, &sqe, &cqe);
-    double t_load_us = get_time_us() - t_load_start;
-    printf("[1. LOAD]     Command Round-Trip Time: %.2f us (Status: 0x%x)\n", t_load_us, cqe.status);
+        double t0 = get_time_us();
+        bench_submit_poll(qmem, &sqe, &cqe);
+        load_times[i] = get_time_us() - t0;
+    }
+    double load_mean = calc_mean(load_times, ctrl_runs);
+    double load_std = calc_std(load_times, ctrl_runs, load_mean);
+    printf("[1. LOAD]     Command Round-Trip Time: %.2f ± %.2f us (n=%d, Status: 0x%x)\n",
+           load_mean, load_std, ctrl_runs, cqe.status);
 
-    // --- MEASUREMENT 2: ACTIVATE (JIT Compilation) Latency ---
-    memset(&sqe, 0, sizeof(sqe));
-    sqe.opcode = NVME_CMD_EBPF_ACTIVATE;
-    sqe.flags = NVME_FLAG_SILENT;
-    sqe.cid = cid++;
+    // --- MEASUREMENT 2: ACTIVATE (JIT Compilation) Latency (Sampled over 20 runs) ---
+    double act_times[ctrl_runs];
+    double act_cycles[ctrl_runs];
+    for (int i = 0; i < ctrl_runs; i++) {
+        memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = NVME_CMD_EBPF_ACTIVATE;
+        sqe.flags = NVME_FLAG_SILENT;
+        sqe.cid = cid++;
 
-    double t_act_start = get_time_us();
-    bench_submit_poll(qmem, &sqe, &cqe);
-    double t_act_us = get_time_us() - t_act_start;
-    uint32_t jit_cycles = cqe.rsvd1;
-    printf("[2. ACTIVATE] JIT Compilation Time:    %.2f us (Hardware Cycles: %u)\n", t_act_us, jit_cycles);
-    printf("              Average per instruction: %.2f cycles/inst\n\n", (double)jit_cycles / num_inst);
+        double t0 = get_time_us();
+        bench_submit_poll(qmem, &sqe, &cqe);
+        act_times[i] = get_time_us() - t0;
+        act_cycles[i] = (double)cqe.rsvd1;
+    }
+    double act_mean = calc_mean(act_times, ctrl_runs);
+    double act_std = calc_std(act_times, ctrl_runs, act_mean);
+    double cycles_mean = calc_mean(act_cycles, ctrl_runs);
+    double cycles_std = calc_std(act_cycles, ctrl_runs, cycles_mean);
+    printf("[2. ACTIVATE] JIT Compilation Time:    %.2f ± %.2f us (Hardware Cycles: %.0f ± %.0f)\n",
+           act_mean, act_std, cycles_mean, cycles_std);
+    printf("              Average per instruction: %.2f cycles/inst\n\n", cycles_mean / num_inst);
 
     // --- MEASUREMENT 3: EXECUTION SCALING (Host vs Core 3 CSD) ---
     uint32_t dataset_sizes[] = { 100, 1000, 5000, 10000, 25000, 50000, 100000 };
@@ -272,13 +306,13 @@ int main(int argc, char *argv[]) {
 
     FILE *csv = fopen("benchmark_results.csv", "w");
     if (csv) {
-        fprintf(csv, "records,data_kb,host_us,csd_us,csd_cycles,speedup,csd_throughput_mrec_s,csd_throughput_mb_s\n");
+        fprintf(csv, "records,data_kb,host_us,host_std_us,csd_us,csd_std_us,csd_cycles,csd_cycles_std,speedup,csd_throughput_mrec_s,csd_throughput_mb_s,csd_throughput_std_mb_s\n");
     }
 
-    printf("----------------------------------------------------------------------------------------------------\n");
-    printf("%-8s | %-8s | %-12s | %-12s | %-12s | %-8s | %-12s\n",
-           "Records", "Size(KB)", "Host Time(us)", "CSD Time(us)", "CSD Cycles", "Speedup", "Throughput");
-    printf("----------------------------------------------------------------------------------------------------\n");
+    printf("-------------------------------------------------------------------------------------------------------------------------\n");
+    printf("%-8s | %-8s | %-16s | %-16s | %-14s | %-8s | %-14s\n",
+           "Records", "Size(KB)", "Host Time (us)", "CSD Time (us)", "CSD Cycles", "Speedup", "Throughput");
+    printf("-------------------------------------------------------------------------------------------------------------------------\n");
 
     for (int s = 0; s < num_sizes; s++) {
         uint32_t n = dataset_sizes[s];
@@ -287,18 +321,20 @@ int main(int argc, char *argv[]) {
         populate_dataset(slm_ctx, n);
 
         // Host Native timing
-        double host_total_us = 0.0;
+        double host_runs[repetitions];
         uint32_t host_matches = 0;
         for (int r = 0; r < repetitions; r++) {
             double t0 = get_time_us();
             host_matches = run_host_baseline(slm_ctx);
-            host_total_us += (get_time_us() - t0);
+            host_runs[r] = get_time_us() - t0;
         }
-        double host_avg_us = host_total_us / repetitions;
+        double host_avg_us = calc_mean(host_runs, repetitions);
+        double host_std_us = calc_std(host_runs, repetitions, host_avg_us);
 
         // CSD NVMe Offload timing
-        double csd_total_us = 0.0;
-        uint64_t csd_total_cycles = 0;
+        double csd_runs[repetitions];
+        double csd_cycles_runs[repetitions];
+        double csd_thru_runs[repetitions];
         uint32_t csd_matches = 0;
 
         // Warmup run
@@ -318,32 +354,47 @@ int main(int argc, char *argv[]) {
 
             double t0 = get_time_us();
             bench_submit_poll(qmem, &sqe, &cqe);
-            csd_total_us += (get_time_us() - t0);
-            csd_total_cycles += cqe.rsvd1;
+            double elap = get_time_us() - t0;
+            csd_runs[r] = elap;
+            csd_cycles_runs[r] = (double)cqe.rsvd1;
+            csd_thru_runs[r] = (data_kb / 1024.0) / (elap / 1000000.0);
             csd_matches = cqe.cdw0;
         }
 
-        double csd_avg_us = csd_total_us / repetitions;
-        uint32_t csd_avg_cycles = (uint32_t)(csd_total_cycles / repetitions);
+        double csd_avg_us = calc_mean(csd_runs, repetitions);
+        double csd_std_us = calc_std(csd_runs, repetitions, csd_avg_us);
+
+        double csd_avg_cycles = calc_mean(csd_cycles_runs, repetitions);
+        double csd_std_cycles = calc_std(csd_cycles_runs, repetitions, csd_avg_cycles);
+
+        double csd_avg_thru = calc_mean(csd_thru_runs, repetitions);
+        double csd_std_thru = calc_std(csd_thru_runs, repetitions, csd_avg_thru);
+
         double speedup = host_avg_us / csd_avg_us;
         double throughput_mrec_s = ((double)n / csd_avg_us);
-        double throughput_mb_s = (data_kb / 1024.0) / (csd_avg_us / 1000000.0);
 
         // Verify correctness
         if (host_matches != csd_matches) {
             printf("[WARNING] Result mismatch! Host=%u, CSD=%u\n", host_matches, csd_matches);
         }
 
-        printf("%-8u | %-8.1f | %-12.2f | %-12.2f | %-12u | %-7.2fx | %-6.1f MB/s\n",
-               n, data_kb, host_avg_us, csd_avg_us, csd_avg_cycles, speedup, throughput_mb_s);
+        char host_buf[32], csd_buf[32], cyc_buf[32], thru_buf[32];
+        snprintf(host_buf, sizeof(host_buf), "%.1f±%.1f", host_avg_us, host_std_us);
+        snprintf(csd_buf, sizeof(csd_buf), "%.1f±%.1f", csd_avg_us, csd_std_us);
+        snprintf(cyc_buf, sizeof(cyc_buf), "%.0f±%.0f", csd_avg_cycles, csd_std_cycles);
+        snprintf(thru_buf, sizeof(thru_buf), "%.1f±%.1f", csd_avg_thru, csd_std_thru);
+
+        printf("%-8u | %-8.1f | %-16s | %-16s | %-14s | %-7.2fx | %-14s\n",
+               n, data_kb, host_buf, csd_buf, cyc_buf, speedup, thru_buf);
 
         if (csv) {
-            fprintf(csv, "%u,%.2f,%.2f,%.2f,%u,%.3f,%.2f,%.2f\n",
-                    n, data_kb, host_avg_us, csd_avg_us, csd_avg_cycles, speedup, throughput_mrec_s, throughput_mb_s);
+            fprintf(csv, "%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.3f,%.2f,%.2f,%.2f\n",
+                    n, data_kb, host_avg_us, host_std_us, csd_avg_us, csd_std_us,
+                    csd_avg_cycles, csd_std_cycles, speedup, throughput_mrec_s, csd_avg_thru, csd_std_thru);
         }
     }
 
-    printf("----------------------------------------------------------------------------------------------------\n");
+    printf("-------------------------------------------------------------------------------------------------------------------------\n");
     if (csv) {
         fclose(csv);
         printf("[BENCH] Full results written to 'benchmark_results.csv'.\n");

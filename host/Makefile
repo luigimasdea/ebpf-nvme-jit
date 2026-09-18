@@ -9,7 +9,7 @@ host_manager: host_manager.c
 	$(CC) $(CFLAGS) $< -o $@
 
 host_benchmark: host_benchmark.c
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $< -o $@ -lm
 
 host_storage_loader: host_storage_loader.c
 	$(CC) $(CFLAGS) $< -o $@

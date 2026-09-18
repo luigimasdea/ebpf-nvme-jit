@@ -1,93 +1,209 @@
 [
   {
-    "file": "apps/main.c",
-    "arguments": [
-      "clang",
-      "-target",
-      "bpf",
-      "-O2",
-      "-c",
-      "apps/main.c",
-      "-o",
-      "build/app.o"
-    ],
-    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
-    "output": "build/app.o"
-  },
-  {
     "file": "arch/boot.S",
     "arguments": [
-      "riscv64-linux-gnu-gcc",
+      "/usr/sbin/riscv64-linux-gnu-gcc",
       "-march=rv64g",
       "-mabi=lp64",
       "-mcmodel=medany",
       "-Wall",
-      "-O0",
+      "-O2",
       "-g",
       "-ffreestanding",
+      "-fno-pic",
+      "-fno-PIE",
       "-Iinclude",
       "arch/boot.S",
       "-o",
-      "firmware.elf"
+      "build/firmware.elf"
     ],
-    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
-    "output": "firmware.elf"
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/firmware",
+    "output": "build/firmware.elf"
   },
   {
     "file": "src/main.c",
     "arguments": [
-      "riscv64-linux-gnu-gcc",
+      "/usr/sbin/riscv64-linux-gnu-gcc",
       "-march=rv64g",
       "-mabi=lp64",
       "-mcmodel=medany",
       "-Wall",
-      "-O0",
+      "-O2",
       "-g",
       "-ffreestanding",
+      "-fno-pic",
+      "-fno-PIE",
       "-Iinclude",
       "src/main.c",
       "-o",
-      "firmware.elf"
+      "build/firmware.elf"
     ],
-    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
-    "output": "firmware.elf"
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/firmware",
+    "output": "build/firmware.elf"
   },
   {
     "file": "src/jit.c",
     "arguments": [
-      "riscv64-linux-gnu-gcc",
+      "/usr/sbin/riscv64-linux-gnu-gcc",
       "-march=rv64g",
       "-mabi=lp64",
       "-mcmodel=medany",
       "-Wall",
-      "-O0",
+      "-O2",
       "-g",
       "-ffreestanding",
+      "-fno-pic",
+      "-fno-PIE",
       "-Iinclude",
       "src/jit.c",
       "-o",
-      "firmware.elf"
+      "build/firmware.elf"
     ],
-    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
-    "output": "firmware.elf"
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/firmware",
+    "output": "build/firmware.elf"
+  },
+  {
+    "file": "src/nvme_queue.c",
+    "arguments": [
+      "/usr/sbin/riscv64-linux-gnu-gcc",
+      "-march=rv64g",
+      "-mabi=lp64",
+      "-mcmodel=medany",
+      "-Wall",
+      "-O2",
+      "-g",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-PIE",
+      "-Iinclude",
+      "src/nvme_queue.c",
+      "-o",
+      "build/firmware.elf"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/firmware",
+    "output": "build/firmware.elf"
   },
   {
     "file": "src/utils.c",
     "arguments": [
-      "riscv64-linux-gnu-gcc",
+      "/usr/sbin/riscv64-linux-gnu-gcc",
       "-march=rv64g",
       "-mabi=lp64",
       "-mcmodel=medany",
       "-Wall",
-      "-O0",
+      "-O2",
       "-g",
       "-ffreestanding",
+      "-fno-pic",
+      "-fno-PIE",
       "-Iinclude",
       "src/utils.c",
       "-o",
-      "firmware.elf"
+      "build/firmware.elf"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/firmware",
+    "output": "build/firmware.elf"
+  },
+  {
+    "file": "host_manager.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-Wall",
+      "-O2",
+      "-I../firmware/include",
+      "host_manager.c",
+      "-o",
+      "host_manager"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/host",
+    "output": "host_manager"
+  },
+  {
+    "file": "host_benchmark.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-Wall",
+      "-O2",
+      "-I../firmware/include",
+      "host_benchmark.c",
+      "-o",
+      "host_benchmark"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/host",
+    "output": "host_benchmark"
+  },
+  {
+    "file": "host_storage_loader.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-Wall",
+      "-O2",
+      "-I../firmware/include",
+      "host_storage_loader.c",
+      "-o",
+      "host_storage_loader"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/host",
+    "output": "host_storage_loader"
+  },
+  {
+    "file": "host_advanced_loader.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-Wall",
+      "-O2",
+      "-I../firmware/include",
+      "-pthread",
+      "host_advanced_loader.c",
+      "-o",
+      "host_advanced_loader"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/host",
+    "output": "host_advanced_loader"
+  },
+  {
+    "file": "host_ram_loader.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-Wall",
+      "-O2",
+      "-I../firmware/include",
+      "-pthread",
+      "host_ram_loader.c",
+      "-o",
+      "host_ram_loader"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit/host",
+    "output": "host_ram_loader"
+  },
+  {
+    "file": "apps/analytics.c",
+    "arguments": [
+      "/usr/sbin/clang",
+      "-target",
+      "bpf",
+      "-O2",
+      "-c",
+      "apps/analytics.c",
+      "-o",
+      "apps/build/app.o"
     ],
     "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
-    "output": "firmware.elf"
+    "output": "apps/build/app.o"
+  },
+  {
+    "file": "apps/analytics_advanced.c",
+    "arguments": [
+      "/usr/sbin/clang",
+      "-target",
+      "bpf",
+      "-O2",
+      "-c",
+      "apps/analytics_advanced.c",
+      "-o",
+      "apps/build/analytics_advanced.o"
+    ],
+    "directory": "/home/luigim/uni/eBPF_JIT/ebpf-nvme-jit",
+    "output": "apps/build/analytics_advanced.o"
   }
 ]
