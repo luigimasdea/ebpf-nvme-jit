@@ -23,4 +23,5 @@ tools/test_jit_caching
 .gdb_history
 .cache
 compile_commands.json
-
+__pycache__/
+*.pyc

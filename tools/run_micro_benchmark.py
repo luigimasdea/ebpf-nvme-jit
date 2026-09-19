@@ -43,6 +43,12 @@ def main():
     print(f"      Output CSV:         {output_csv}                                   ")
     print("==========================================================================")
 
+    try:
+        from benchmark_env import setup_performance_governor
+        setup_performance_governor()
+    except Exception:
+        pass
+
     cmd = ["sudo", "./host/host_benchmark", app_bin]
     if args.shutdown:
         cmd.append("--shutdown")

@@ -80,8 +80,13 @@ def run_suite(mode, chunk_sizes, runs, disk_file):
         print(f"       Dataset File: {disk_file}")
     else:
         print(f"       CHUNKING MATRIX BENCHMARK: IN-RAM ONFI 5.0 SIMULATION - {runs} RUNS                   ")
-        print(f"       Dataset Size: 15.26 MB (1M records equivalent)")
-    print(f"==============================================================================================")
+        print(f"==============================================================================================")
+
+    try:
+        from benchmark_env import setup_performance_governor
+        setup_performance_governor()
+    except Exception:
+        pass
 
     # Warmup
     print(f"[Warmup] Running initial warmup chunk {chunk_sizes[0]} KB...")

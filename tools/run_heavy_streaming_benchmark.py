@@ -16,12 +16,10 @@ import csv
 import argparse
 from collections import defaultdict
 
-def set_performance_governor():
-    """Attempt to set CPU governor to 'performance' on Linux to prevent DVFS jitter."""
-    try:
-        cmd = "echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1"
-        subprocess.run(cmd, shell=True, check=False)
-    except Exception:
+try:
+    from benchmark_env import setup_performance_governor
+except ImportError:
+    def setup_performance_governor():
         pass
 
 def run_benchmark(size_mb, chunk_kb, sel_pct):
@@ -109,7 +107,7 @@ def main():
     print("----------------------------------------------------------------------------------------------")
 
     # Set governor to reduce frequency ramping variance
-    set_performance_governor()
+    setup_performance_governor()
 
     # Warmup run
     print("[Warmup] Executing warmup run...")

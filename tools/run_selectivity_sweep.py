@@ -109,6 +109,12 @@ def main():
     print(f"  Selectivities  : {SELECTIVITIES}%")
     print("----------------------------------------------------------------------------------------------")
 
+    try:
+        from benchmark_env import setup_performance_governor
+        setup_performance_governor()
+    except Exception:
+        pass
+
     # Warmup
     print("[Warmup] Running initial warmup...")
     run_benchmark(size_mb, chunk_kb, 3)

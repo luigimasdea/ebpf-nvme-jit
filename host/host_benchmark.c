@@ -352,6 +352,9 @@ int main(int argc, char *argv[]) {
 
         populate_dataset(slm_ctx, n);
 
+        // Warmup run for Host
+        (void)run_host_baseline(slm_ctx);
+
         // Host Native timing
         double host_runs[repetitions];
         uint32_t host_matches = 0;
