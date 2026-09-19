@@ -88,9 +88,9 @@ def generate_plots(csv_path="benchmark_results.csv", output_dir="../docs"):
     # Plot lines with optional error bars
     if any(s > 0 for s in host_std_ms):
         ax.errorbar(records, host_ms, yerr=host_std_ms, fmt='o-', color='#1f77b4',
-                    linewidth=2, markersize=6, capsize=3, label='Host Native (GCC -O2 on Linux Core 0)')
+                    linewidth=2, markersize=6, capsize=3, label='Host Native (GCC -O2 on Linux Core 1)')
     else:
-        ax.plot(records, host_ms, 'o-', color='#1f77b4', linewidth=2, markersize=6, label='Host Native (GCC -O2 on Linux Core 0)')
+        ax.plot(records, host_ms, 'o-', color='#1f77b4', linewidth=2, markersize=6, label='Host Native (GCC -O2 on Linux Core 1)')
 
     if any(s > 0 for s in csd_std_ms):
         ax.errorbar(records, csd_ms, yerr=csd_std_ms, fmt='s--', color='#d62728',
@@ -150,7 +150,7 @@ def generate_plots(csv_path="benchmark_results.csv", output_dir="../docs"):
 
     ax.plot(x_labels, pct_ratio, 'D-', color='#ff7f0e', linewidth=2.2, markersize=7, label='CSD JIT Speed relative to GCC -O2 (%)')
     ax.axhline(100, color='#1f77b4', linestyle=':', linewidth=1.8, label='Host Baseline (GCC -O2 = 100%)')
-    ax.axhspan(80, 90, color='#2ca02c', alpha=0.15, label='High Efficiency Zone (80% - 90%)')
+    ax.axhspan(60, 65, color='#2ca02c', alpha=0.15, label='Nominal Steady-State Zone (60% - 65%)')
 
     for x, y in zip(x_labels, pct_ratio):
         ax.annotate(f'{y:.1f}%', xy=(x, y), xytext=(0, 7), textcoords="offset points",
