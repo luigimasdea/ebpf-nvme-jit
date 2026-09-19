@@ -2,8 +2,10 @@
 # eBPF-NVMe-JIT Master Makefile for StarFive VisionFive 2 (AMP Architecture)
 # ==============================================================================
 
-APP_SRC ?= apps/analytics.c
-APP_BIN ?= apps/app.bin
+APP_SIMPLE_SRC ?= apps/analytics_simple.c
+APP_SIMPLE_BIN ?= apps/analytics_simple.bin
+APP_ADV_SRC ?= apps/analytics_advanced.c
+APP_ADV_BIN ?= apps/analytics_advanced.bin
 
 # Tools
 BPF_CC ?= clang
@@ -22,22 +24,22 @@ endif
 help:
 	@echo "eBPF-NVMe-JIT Build System"
 	@echo "Targets:"
-	@echo "  make all       - Build firmware, host monitor, eBPF app, and kick_core"
+	@echo "  make all       - Build firmware, host monitor, eBPF apps, and kick_core"
 	@echo "  make firmware  - Build generic bare-metal firmware (firmware/build/firmware.bin)"
 	@echo "  make host      - Build userspace host manager (host/host_manager)"
-	@echo "  make app       - Compile standalone eBPF app binary (apps/app.bin)"
+	@echo "  make app       - Compile eBPF app binaries (analytics_simple.bin & analytics_advanced.bin)"
 	@echo "  make kick      - Build kernel module kicker (tools/kick_core/vf2_kick.ko)"
 	@echo "  make clean     - Clean all build artifacts"
 
 # 1. Compile standalone eBPF app binaries
-app: $(APP_SRC) apps/analytics_advanced.c
+app: $(APP_SIMPLE_SRC) $(APP_ADV_SRC)
 	@mkdir -p apps/build
-	$(BPF_CC) -target bpf -O2 -c $(APP_SRC) -o apps/build/app.o
-	$(OBJCOPY) -O binary --only-section=app apps/build/app.o $(APP_BIN)
-	@echo "Generated standalone eBPF binary: $(APP_BIN)"
-	$(BPF_CC) -target bpf -O2 -c apps/analytics_advanced.c -o apps/build/analytics_advanced.o
-	$(OBJCOPY) -O binary --only-section=app apps/build/analytics_advanced.o apps/analytics_advanced.bin
-	@echo "Generated advanced eBPF binary: apps/analytics_advanced.bin"
+	$(BPF_CC) -target bpf -O2 -c $(APP_SIMPLE_SRC) -o apps/build/analytics_simple.o
+	$(OBJCOPY) -O binary --only-section=app apps/build/analytics_simple.o $(APP_SIMPLE_BIN)
+	@echo "Generated simple eBPF binary: $(APP_SIMPLE_BIN)"
+	$(BPF_CC) -target bpf -O2 -c $(APP_ADV_SRC) -o apps/build/analytics_advanced.o
+	$(OBJCOPY) -O binary --only-section=app apps/build/analytics_advanced.o $(APP_ADV_BIN)
+	@echo "Generated advanced eBPF binary: $(APP_ADV_BIN)"
 
 # 2. Sub-module targets
 firmware:
@@ -59,5 +61,5 @@ clean:
 	$(MAKE) -C firmware clean
 	$(MAKE) -C host clean
 	$(MAKE) -C tools/kick_core clean
-	rm -rf firmware/build apps/build $(APP_BIN) tools/generate_dataset
+	rm -rf firmware/build apps/build $(APP_SIMPLE_BIN) $(APP_ADV_BIN) tools/generate_dataset
 

@@ -30,7 +30,7 @@
 #define SLM_BUF_B_PHYS_ADDR (PHYS_BASE + SLM_BUF_B_OFFSET)
 
 #define FW_BINARY           "firmware/build/firmware.bin"
-#define DEFAULT_APP_BIN     "apps/app.bin"
+#define DEFAULT_APP_BIN     "apps/analytics_simple.bin"
 
 #define DEFAULT_CHUNK_KB    256 // Default streaming chunk: 256 KB
 

@@ -17,7 +17,7 @@ import csv
 import re
 
 def main():
-    app_bin = sys.argv[1] if len(sys.argv) > 1 else "apps/app.bin"
+    app_bin = sys.argv[1] if len(sys.argv) > 1 else "apps/analytics_simple.bin"
     output_csv = sys.argv[2] if len(sys.argv) > 2 else "benchmark_results.csv"
 
     if not os.path.exists("./host/host_benchmark"):

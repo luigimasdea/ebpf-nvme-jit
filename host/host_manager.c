@@ -120,7 +120,7 @@ static int submit_nvme_cmd(volatile struct nvme_queue_mem *qmem,
 int main(int argc, char *argv[]) {
     int mem_fd, fw_fd, app_fd;
     uint8_t *map_base;
-    const char *app_bin_path = (argc > 1) ? argv[1] : "apps/app.bin";
+    const char *app_bin_path = (argc > 1) ? argv[1] : "apps/analytics_simple.bin";
 
     printf("====================================================\n");
     printf("[HOST] VisionFive 2 NVMe Computational Storage Host\n");
@@ -128,7 +128,7 @@ int main(int argc, char *argv[]) {
 
     // Check for eBPF binary fallback location if running from host/ directory
     if (access(app_bin_path, F_OK) != 0 && argc <= 1) {
-        app_bin_path = "../apps/app.bin";
+        app_bin_path = "../apps/analytics_simple.bin";
     }
 
     mem_fd = open("/dev/mem", O_RDWR | O_SYNC);

@@ -253,13 +253,13 @@ struct analytics_context {
 
 static bool test_standard_analytics(void *jit_buf, size_t mem_size) {
     printf("\n--------------------------------------------------------------------\n");
-    printf("TEST 2: Standard Analytics (app.bin - Backward Compatibility)\n");
+    printf("TEST 2: Simple Analytics (analytics_simple.bin - Backward Compatibility)\n");
     printf("--------------------------------------------------------------------\n");
 
-    const char *bin_path = "apps/app.bin";
+    const char *bin_path = "apps/analytics_simple.bin";
     int fd = open(bin_path, O_RDONLY);
     if (fd < 0) {
-        perror("Failed to open apps/app.bin");
+        perror("Failed to open apps/analytics_simple.bin");
         return false;
     }
 
