@@ -85,18 +85,21 @@ def run_benchmark(size_mb, chunk_kb, sel_pct):
     return metrics
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="CSD Filter Selectivity Sensitivity Sweep (Break-Even Study)")
+    parser.add_argument("--size", type=int, default=DEFAULT_SIZE_MB, help=f"Data volume in MB (default: {DEFAULT_SIZE_MB})")
+    parser.add_argument("--chunk", type=int, default=DEFAULT_CHUNK_KB, help=f"Streaming chunk in KB (default: {DEFAULT_CHUNK_KB})")
+    parser.add_argument("--no-plot", action="store_true", help="Skip automatic plot generation")
+    parser.add_argument("--shutdown", action="store_true", help="Park Core 3 via SBI HSM when benchmark completes")
+
+    args = parser.parse_args()
+
     if not os.path.exists("./host/host_loader"):
-        print("Error: ./host/host_loader not found. Please run 'make host' first.")
+        print("[ERROR] ./host/host_loader not found. Please run 'make host' first.")
         sys.exit(1)
 
-    size_mb = DEFAULT_SIZE_MB
-    chunk_kb = DEFAULT_CHUNK_KB
-
-    if len(sys.argv) > 1:
-        try:
-            size_mb = int(sys.argv[1])
-        except ValueError:
-            pass
+    size_mb = args.size
+    chunk_kb = args.chunk
 
     print("==============================================================================================")
     print("                CSD FILTER SELECTIVITY SENSITIVITY SWEEP (BREAK-EVEN STUDY)                   ")
@@ -167,6 +170,22 @@ def main():
             })
 
     print(f"\n[INFO] Selectivity sweep data saved to: {csv_file}")
+
+    # Plot generation
+    if not args.no_plot:
+        plot_script = os.path.join(os.path.dirname(__file__), "plot_selectivity_benchmarks.py")
+        if os.path.exists(plot_script):
+            print("\n[PLOTTING] Generating updated sensitivity figure (plot_selectivity_sensitivity.png)...")
+            subprocess.run([sys.executable, plot_script, csv_file])
+
+    # Shutdown Core 3 if requested
+    if args.shutdown:
+        print("\n[SHUTDOWN] Parking Core 3...")
+        subprocess.run(["sudo", "./host/host_loader", "--stream", "1", "256", "3", "--shutdown"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("[SHUTDOWN] Core 3 parked cleanly.")
+
+    print("\n[SUCCESS] Selectivity sweep complete!")
 
 if __name__ == "__main__":
     main()

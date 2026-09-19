@@ -186,11 +186,16 @@ static void populate_dataset(struct analytics_context *ctx, uint32_t count) {
 int main(int argc, char *argv[]) {
     int mem_fd, fw_fd, app_fd;
     uint8_t *map_base;
-    const char *app_bin_path = (argc > 1) ? argv[1] : "apps/analytics_simple.bin";
+    bool do_shutdown = false;
+    const char *app_bin_path = "apps/analytics_simple.bin";
 
-    printf("========================================================================\n");
-    printf("     VisionFive 2 eBPF-NVMe Computational Storage Micro-Benchmark       \n");
-    printf("========================================================================\n");
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--shutdown") == 0) {
+            do_shutdown = true;
+        } else if (argv[i][0] != '-') {
+            app_bin_path = argv[i];
+        }
+    }
 
     if (access(app_bin_path, F_OK) != 0 && argc <= 1) {
         app_bin_path = "../apps/analytics_simple.bin";
@@ -215,13 +220,58 @@ int main(int argc, char *argv[]) {
     uint8_t *slm_prog = map_base + SLM_PROG_OFFSET;
     struct analytics_context *slm_ctx = (struct analytics_context *)(map_base + SLM_DATA_OFFSET);
 
-    // 1. Reset memory and Queues
-    printf("[BENCH] Resetting VCON and NVMe queues...\n");
-    *vcon_idx = 0;
-    memset((void*)vcon_buf, 0, VCON_SIZE - 4);
-    memset((void*)qmem, 0, sizeof(struct nvme_queue_mem));
+    // Boot or reuse Core 3
+    if (qmem->regs.status == NVME_STATUS_READY) {
+        printf("[BENCH] Core 3 is ALREADY alive and READY! Reusing active CSD...\n");
+        qmem->regs.sq_tail = qmem->regs.sq_head;
+        qmem->regs.cq_head = qmem->regs.cq_tail;
+        __sync_synchronize();
+    } else {
+        *vcon_idx = 0;
+        memset((void *)vcon_buf, 0, VCON_SIZE - 4);
+        memset((void *)qmem, 0, sizeof(struct nvme_queue_mem));
 
-    // 2. Load eBPF application binary from disk into SLM
+        printf("[BENCH] Injecting firmware into RAM...\n");
+        fw_fd = open(FW_BINARY, O_RDONLY);
+        if (fw_fd < 0) fw_fd = open("../" FW_BINARY, O_RDONLY);
+        if (fw_fd >= 0) {
+            ssize_t bytes_read = read(fw_fd, map_base, 0x100000);
+            close(fw_fd);
+            printf("[BENCH] Firmware injected (%zd bytes).\n", bytes_read);
+        } else {
+            printf("[BENCH WARNING] Could not open firmware binary! Skipping injection.\n");
+        }
+
+        // Ensure Core 3 is offline in Linux
+        system("sh -c 'echo 0 > /sys/devices/system/cpu/cpu3/online 2>/dev/null'");
+        system("rmmod vf2_kick 2>/dev/null");
+
+        printf("[BENCH] Kicking Core 3 via OpenSBI HSM...\n");
+        int ins_ret = system("insmod tools/kick_core/vf2_kick.ko 2>/dev/null");
+        if (ins_ret != 0) {
+            ins_ret = system("insmod ../tools/kick_core/vf2_kick.ko 2>/dev/null");
+        }
+        if (ins_ret != 0) {
+            fprintf(stderr, "[BENCH WARNING] insmod vf2_kick failed! Check 'dmesg | tail'.\n");
+        }
+
+        printf("[BENCH] Waiting for Core 3 boot...\n");
+        int wait_count = 0;
+        while (qmem->regs.status != NVME_STATUS_READY) {
+            drain_vcon();
+            usleep(10000);
+            if (++wait_count > 1000) {
+                fprintf(stderr, "\n[BENCH ERROR] Timeout waiting for Core 3 READY status!\n");
+                munmap(map_base, MAP_SIZE);
+                close(mem_fd);
+                return 1;
+            }
+        }
+        drain_vcon();
+        printf("[BENCH] Core 3 READY detected!\n\n");
+    }
+
+    // Load eBPF application binary from disk into SLM
     printf("[BENCH] Loading eBPF program from '%s'...\n", app_bin_path);
     app_fd = open(app_bin_path, O_RDONLY);
     if (app_fd < 0) {
@@ -231,27 +281,8 @@ int main(int argc, char *argv[]) {
     ssize_t prog_bytes = read(app_fd, slm_prog, 0x10000);
     close(app_fd);
     uint32_t num_inst = prog_bytes / 8;
-    printf("[BENCH] Injected %zd bytes (%u instructions) into SLM (0x%llx).\n",
+    printf("[BENCH] Injected %zd bytes (%u instructions) into SLM (0x%llx).\n\n",
            prog_bytes, num_inst, (unsigned long long)SLM_PROG_PHYS_ADDR);
-
-    // 3. Inject firmware binary
-    printf("[BENCH] Injecting firmware into RAM...\n");
-    fw_fd = open(FW_BINARY, O_RDONLY);
-    if (fw_fd < 0) fw_fd = open("../" FW_BINARY, O_RDONLY);
-    if (fw_fd >= 0) {
-        read(fw_fd, map_base, 0x100000);
-        close(fw_fd);
-    } else {
-        printf("[BENCH WARNING] Could not open firmware binary! Skipping injection.\n");
-    }
-
-    printf("[BENCH] Waiting for Core 3 boot... (insmod vf2_kick.ko now)\n");
-    while (qmem->regs.status != NVME_STATUS_READY) {
-        drain_vcon();
-        usleep(5000);
-    }
-    drain_vcon();
-    printf("[BENCH] Core 3 READY detected!\n\n");
 
     struct nvme_sqe sqe = {0};
     struct nvme_cqe cqe = {0};
@@ -400,13 +431,19 @@ int main(int argc, char *argv[]) {
         printf("[BENCH] Full results written to 'benchmark_results.csv'.\n");
     }
 
-    // Clean shutdown
-    memset(&sqe, 0, sizeof(sqe));
-    sqe.opcode = NVME_CMD_SHUTDOWN;
-    sqe.flags = NVME_FLAG_SILENT;
-    sqe.cid = cid++;
-    bench_submit_poll(qmem, &sqe, &cqe);
-    printf("[BENCH] Core 3 parked via SBI HSM.\n");
+    // Clean shutdown if requested
+    if (do_shutdown) {
+        memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = NVME_CMD_SHUTDOWN;
+        sqe.flags = NVME_FLAG_SILENT;
+        sqe.cid = cid++;
+        bench_submit_poll(qmem, &sqe, &cqe);
+        qmem->regs.status = 0;
+        __sync_synchronize();
+        printf("[BENCH] Core 3 parked via SBI HSM.\n");
+    } else {
+        printf("[BENCH] Core 3 kept alive and READY for subsequent benchmarks.\n");
+    }
 
     munmap(map_base, MAP_SIZE);
     close(mem_fd);

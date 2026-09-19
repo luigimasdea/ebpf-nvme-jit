@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--sel", type=int, default=100, help="Selectivity percentage: 3, 10, 25, 50, 75, 100 (default: 100)")
     parser.add_argument("--runs", type=int, default=5, help="Number of repetitions for statistical sampling (default: 5)")
     parser.add_argument("--csv", type=str, default="benchmark_results_repeated.csv", help="Output CSV filename")
+    parser.add_argument("--shutdown", action="store_true", help="Park Core 3 via SBI HSM when benchmark completes")
 
     args = parser.parse_args()
 
@@ -176,6 +177,13 @@ def main():
             writer.writerow([sz, sel_pct, runs, mode_name, round(t_mean, 2), round(t_std, 2), round(th_mean, 2), round(th_std, 2)])
 
     print(f"[INFO] Statistics saved to '{args.csv}'.")
+
+    # Shutdown Core 3 if requested
+    if args.shutdown:
+        print("\n[SHUTDOWN] Parking Core 3...")
+        subprocess.run(["sudo", "./host/host_loader", "--stream", "1", "256", "3", "--shutdown"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("[SHUTDOWN] Core 3 parked cleanly.")
 
 if __name__ == "__main__":
     main()

@@ -222,6 +222,7 @@ static void print_usage(const char *prog) {
     printf("\nOptions:\n");
     printf("  --contention, -c   Run background CPU worker on Host to test QoS\n");
     printf("  --vcon             Drain and display Core 3 Virtual Console debug log\n");
+    printf("  --shutdown         Park Core 3 via SBI HSM after benchmark completes\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -237,6 +238,7 @@ int main(int argc, char *argv[]) {
     uint32_t sel_pct = 3; // Default 3% selectivity
     bool contention_enabled = false;
     bool show_vcon = false;
+    bool do_shutdown = false;
 
     // Parse options
     for (int i = 1; i < argc; i++) {
@@ -244,6 +246,8 @@ int main(int argc, char *argv[]) {
             contention_enabled = true;
         } else if (strcmp(argv[i], "--vcon") == 0) {
             show_vcon = true;
+        } else if (strcmp(argv[i], "--shutdown") == 0) {
+            do_shutdown = true;
         }
     }
 
@@ -914,6 +918,19 @@ int main(int argc, char *argv[]) {
         printf("\n[CORE3 VCON LOG DUMP]\n");
         drain_vcon();
         printf("---------------------\n");
+    }
+
+    if (do_shutdown) {
+        memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = NVME_CMD_SHUTDOWN;
+        sqe.flags = NVME_FLAG_SILENT;
+        sqe.cid = ++cid;
+        submit_nvme_cmd_silent(qmem, &sqe, &cqe, 1000);
+        qmem->regs.status = 0;
+        __sync_synchronize();
+        printf("[HOST] Core 3 parked via SBI HSM.\n");
+    } else {
+        printf("[HOST] Core 3 kept alive and READY for subsequent benchmarks.\n");
     }
 
     if (raw_dataset) free(raw_dataset);

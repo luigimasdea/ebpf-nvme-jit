@@ -36,6 +36,8 @@ def main():
     host_thru = [r["host_thru_mb_s"] for r in rows]
     csd_thru = [r["csd_pipe_thru_mb_s"] for r in rows]
 
+    speedup_pipe = [r.get("true_csd_pipe_speedup_vs_pcie", r["true_csd_speedup_vs_pcie"]) for r in rows]
+
     plt.style.use('seaborn-v0_8-whitegrid' if 'seaborn-v0_8-whitegrid' in plt.style.available else 'default')
     plt.rcParams.update({
         'font.size': 11,
@@ -44,23 +46,27 @@ def main():
         'axes.titlesize': 13,
         'xtick.labelsize': 10,
         'ytick.labelsize': 10,
-        'legend.fontsize': 10,
+        'legend.fontsize': 9,
     })
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5), dpi=300)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.2), dpi=300)
 
     # Subplot 1: Speedup and Data Reduction vs Selectivity
     color_spd = '#1f77b4' # blue
+    color_pipe = '#9467bd' # purple
     color_red = '#2ca02c' # green
 
-    ax1.plot(sel, speedup_pcie, 'o-', color=color_spd, linewidth=2.5, markersize=8, label='CSD Speedup vs. Storage PCIe')
+    ax1.plot(sel, speedup_pcie, 'o-', color=color_spd, linewidth=2.5, markersize=8, label='CSD vs. Storage (Seq Return)')
+    ax1.plot(sel, speedup_pipe, '^--', color=color_pipe, linewidth=2.0, markersize=7, label='CSD vs. Storage (Pipe Return)')
     for x, y in zip(sel, speedup_pcie):
-        ax1.annotate(f"{y:.2f}x", (x, y), textcoords="offset points", xytext=(0, 10), ha='center', fontweight='bold', color=color_spd)
+        ax1.annotate(f"{y:.2f}x", (x, y), textcoords="offset points", xytext=(0, 10), ha='center', fontweight='bold', color=color_spd, fontsize=9)
 
+    ax1.axhline(1.0, color='gray', linestyle=':', alpha=0.7, label='Break-even (1.0x)')
     ax1.set_xlabel('Filter Selectivity (% of matched records)', fontweight='bold')
     ax1.set_ylabel('End-to-End Speedup (vs. Host Storage)', color=color_spd, fontweight='bold')
     ax1.tick_params(axis='y', labelcolor=color_spd)
-    ax1.set_ylim(1.0, 8.0)
+    y_max = max(max(speedup_pcie), max(speedup_pipe)) * 1.15
+    ax1.set_ylim(0.5, y_max)
     ax1.set_title('(a) End-to-End Speedup & Bus Reduction Curve', fontweight='bold')
 
     # Twin axis for data reduction

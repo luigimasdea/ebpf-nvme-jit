@@ -17,8 +17,17 @@ import csv
 import re
 
 def main():
-    app_bin = sys.argv[1] if len(sys.argv) > 1 else "apps/analytics_simple.bin"
-    output_csv = sys.argv[2] if len(sys.argv) > 2 else "benchmark_results.csv"
+    import argparse
+    parser = argparse.ArgumentParser(description="Automated Micro-Benchmark Suite for eBPF NVMe CSD")
+    parser.add_argument("--app", type=str, default="apps/analytics_simple.bin", help="Target eBPF application binary")
+    parser.add_argument("--csv", type=str, default="benchmark_results.csv", help="Output CSV filename")
+    parser.add_argument("--no-plot", action="store_true", help="Skip automatic plot generation")
+    parser.add_argument("--shutdown", action="store_true", help="Park Core 3 via SBI HSM when benchmark completes")
+
+    args = parser.parse_args()
+
+    app_bin = args.app
+    output_csv = args.csv
 
     if not os.path.exists("./host/host_benchmark"):
         print("[ERROR] ./host/host_benchmark not found. Please run 'make -C host host_benchmark' first.")
@@ -35,6 +44,9 @@ def main():
     print("==========================================================================")
 
     cmd = ["sudo", "./host/host_benchmark", app_bin]
+    if args.shutdown:
+        cmd.append("--shutdown")
+
     print(f"Executing: {' '.join(cmd)}\n")
 
     try:
@@ -51,11 +63,12 @@ def main():
         print(f"[INFO] Copied results to {output_csv}")
 
     # Generate updated plots
-    plot_script = os.path.join(os.path.dirname(__file__), "plot_benchmarks.py")
-    if os.path.exists(plot_script):
-        print("\nGenerating updated plots...")
-        plot_cmd = [sys.executable, plot_script, output_csv]
-        subprocess.run(plot_cmd)
+    if not args.no_plot:
+        plot_script = os.path.join(os.path.dirname(__file__), "plot_benchmarks.py")
+        if os.path.exists(plot_script):
+            print("\nGenerating updated plots...")
+            plot_cmd = [sys.executable, plot_script, output_csv]
+            subprocess.run(plot_cmd)
 
     print("\n[SUCCESS] Micro-benchmark complete!")
 
