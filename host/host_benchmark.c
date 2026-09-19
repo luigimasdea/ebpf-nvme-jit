@@ -12,8 +12,16 @@
 #include <sys/mman.h>
 #include <math.h>
 
+#include <sched.h>
+
 #include "nvme_spec.h"
 #include "nvme_queue.h"
+
+static int cmp_double(const void *a, const void *b) {
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    return (da > db) - (da < db);
+}
 
 static inline double calc_mean(const double *arr, int n) {
     if (n <= 0) return 0.0;
@@ -30,6 +38,51 @@ static inline double calc_std(const double *arr, int n, double mean) {
         sum_sq += d * d;
     }
     return sqrt(sum_sq / (n - 1));
+}
+
+/**
+ * Calculates trimmed mean and std dev to eliminate sporadic OS interrupt jitter.
+ * Trims top 10% and bottom 10% outliers when n >= 10.
+ */
+static inline void calc_trimmed_stats(const double *arr, int n, double *out_mean, double *out_std) {
+    if (n <= 0) {
+        *out_mean = 0.0;
+        *out_std = 0.0;
+        return;
+    }
+    if (n < 6) {
+        *out_mean = calc_mean(arr, n);
+        *out_std = calc_std(arr, n, *out_mean);
+        return;
+    }
+    double sorted[n];
+    memcpy(sorted, arr, n * sizeof(double));
+    qsort(sorted, n, sizeof(double), cmp_double);
+
+    int trim = n / 10;
+    if (trim < 1) trim = 1;
+    int valid_n = n - 2 * trim;
+
+    double sum = 0.0;
+    for (int i = trim; i < n - trim; i++) {
+        sum += sorted[i];
+    }
+    double mean = sum / valid_n;
+
+    double sum_sq = 0.0;
+    for (int i = trim; i < n - trim; i++) {
+        double d = sorted[i] - mean;
+        sum_sq += d * d;
+    }
+    *out_mean = mean;
+    *out_std = sqrt(sum_sq / (valid_n > 1 ? valid_n - 1 : 1));
+}
+
+static inline int get_repetitions_for_size(uint32_t n) {
+    if (n <= 1000) return 50;
+    if (n <= 10000) return 30;
+    if (n <= 100000) return 20;
+    return 15;
 }
 
 #define PHYS_BASE           0x222000000ULL
@@ -215,6 +268,14 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Pin Host benchmark process to Core 1 (Core 0 handles OS IRQs, Core 3 is CSD)
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(1, &cpuset);
+    if (sched_setaffinity(0, sizeof(cpuset), &cpuset) == 0) {
+        printf("[BENCH] Pinned benchmark process to CPU 1 (isolated from Core 0 IRQs).\n");
+    }
+
     vcon_idx = (volatile uint32_t *)(map_base + VCON_OFFSET + VCON_SIZE - 4);
     vcon_buf = (volatile char *)(map_base + VCON_OFFSET);
     volatile struct nvme_queue_mem *qmem = (volatile struct nvme_queue_mem *)(map_base + NVME_QUEUE_OFFSET);
@@ -288,9 +349,18 @@ int main(int argc, char *argv[]) {
     struct nvme_sqe sqe = {0};
     struct nvme_cqe cqe = {0};
     uint16_t cid = 1;
-    int ctrl_runs = 20;
+    int ctrl_runs = 50;
 
-    // --- MEASUREMENT 1: LOAD Command Latency (Sampled over 20 runs) ---
+    // Warmup LOAD
+    memset(&sqe, 0, sizeof(sqe));
+    sqe.opcode = NVME_CMD_EBPF_LOAD;
+    sqe.flags = NVME_FLAG_SILENT;
+    sqe.cid = cid++;
+    sqe.prp1 = SLM_PROG_PHYS_ADDR;
+    sqe.cdw10 = num_inst;
+    bench_submit_poll(qmem, &sqe, &cqe);
+
+    // --- MEASUREMENT 1: LOAD Command Latency (Sampled over 50 runs with outlier trimming) ---
     double load_times[ctrl_runs];
     for (int i = 0; i < ctrl_runs; i++) {
         memset(&sqe, 0, sizeof(sqe));
@@ -304,12 +374,19 @@ int main(int argc, char *argv[]) {
         bench_submit_poll(qmem, &sqe, &cqe);
         load_times[i] = get_time_us() - t0;
     }
-    double load_mean = calc_mean(load_times, ctrl_runs);
-    double load_std = calc_std(load_times, ctrl_runs, load_mean);
+    double load_mean, load_std;
+    calc_trimmed_stats(load_times, ctrl_runs, &load_mean, &load_std);
     printf("[1. LOAD]     Command Round-Trip Time: %.2f ± %.2f us (n=%d, Status: 0x%x)\n",
            load_mean, load_std, ctrl_runs, cqe.status);
 
-    // --- MEASUREMENT 2: ACTIVATE (JIT Compilation) Latency (Sampled over 20 runs) ---
+    // Warmup ACTIVATE
+    memset(&sqe, 0, sizeof(sqe));
+    sqe.opcode = NVME_CMD_EBPF_ACTIVATE;
+    sqe.flags = NVME_FLAG_SILENT;
+    sqe.cid = cid++;
+    bench_submit_poll(qmem, &sqe, &cqe);
+
+    // --- MEASUREMENT 2: ACTIVATE (JIT Compilation) Latency (Sampled over 50 runs with outlier trimming) ---
     double act_times[ctrl_runs];
     double act_cycles[ctrl_runs];
     for (int i = 0; i < ctrl_runs; i++) {
@@ -323,18 +400,17 @@ int main(int argc, char *argv[]) {
         act_times[i] = get_time_us() - t0;
         act_cycles[i] = (double)cqe.rsvd1;
     }
-    double act_mean = calc_mean(act_times, ctrl_runs);
-    double act_std = calc_std(act_times, ctrl_runs, act_mean);
-    double cycles_mean = calc_mean(act_cycles, ctrl_runs);
-    double cycles_std = calc_std(act_cycles, ctrl_runs, cycles_mean);
+    double act_mean, act_std;
+    double cycles_mean, cycles_std;
+    calc_trimmed_stats(act_times, ctrl_runs, &act_mean, &act_std);
+    calc_trimmed_stats(act_cycles, ctrl_runs, &cycles_mean, &cycles_std);
     printf("[2. ACTIVATE] JIT Compilation Time:    %.2f ± %.2f us (Hardware Cycles: %.0f ± %.0f)\n",
            act_mean, act_std, cycles_mean, cycles_std);
     printf("              Average per instruction: %.2f cycles/inst\n\n", cycles_mean / num_inst);
 
     // --- MEASUREMENT 3: EXECUTION SCALING (Host vs Core 3 CSD) ---
-    uint32_t dataset_sizes[] = { 100, 1000, 5000, 10000, 25000, 50000, 100000 };
+    uint32_t dataset_sizes[] = { 100, 1000, 5000, 10000, 25000, 50000, 100000, 250000, 500000 };
     int num_sizes = sizeof(dataset_sizes) / sizeof(dataset_sizes[0]);
-    int repetitions = 10;
 
     FILE *csv = fopen("benchmark_results.csv", "w");
     if (csv) {
@@ -348,6 +424,7 @@ int main(int argc, char *argv[]) {
 
     for (int s = 0; s < num_sizes; s++) {
         uint32_t n = dataset_sizes[s];
+        int repetitions = get_repetitions_for_size(n);
         double data_kb = (double)(n * sizeof(struct record)) / 1024.0;
 
         populate_dataset(slm_ctx, n);
@@ -363,8 +440,8 @@ int main(int argc, char *argv[]) {
             host_matches = run_host_baseline(slm_ctx);
             host_runs[r] = get_time_us() - t0;
         }
-        double host_avg_us = calc_mean(host_runs, repetitions);
-        double host_std_us = calc_std(host_runs, repetitions, host_avg_us);
+        double host_avg_us, host_std_us;
+        calc_trimmed_stats(host_runs, repetitions, &host_avg_us, &host_std_us);
 
         // CSD NVMe Offload timing
         double csd_runs[repetitions];
@@ -396,14 +473,12 @@ int main(int argc, char *argv[]) {
             csd_matches = cqe.cdw0;
         }
 
-        double csd_avg_us = calc_mean(csd_runs, repetitions);
-        double csd_std_us = calc_std(csd_runs, repetitions, csd_avg_us);
-
-        double csd_avg_cycles = calc_mean(csd_cycles_runs, repetitions);
-        double csd_std_cycles = calc_std(csd_cycles_runs, repetitions, csd_avg_cycles);
-
-        double csd_avg_thru = calc_mean(csd_thru_runs, repetitions);
-        double csd_std_thru = calc_std(csd_thru_runs, repetitions, csd_avg_thru);
+        double csd_avg_us, csd_std_us;
+        double csd_avg_cycles, csd_std_cycles;
+        double csd_avg_thru, csd_std_thru;
+        calc_trimmed_stats(csd_runs, repetitions, &csd_avg_us, &csd_std_us);
+        calc_trimmed_stats(csd_cycles_runs, repetitions, &csd_avg_cycles, &csd_std_cycles);
+        calc_trimmed_stats(csd_thru_runs, repetitions, &csd_avg_thru, &csd_std_thru);
 
         double speedup = host_avg_us / csd_avg_us;
         double throughput_mrec_s = ((double)n / csd_avg_us);
