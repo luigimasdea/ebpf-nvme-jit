@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-run_heavy_streaming_benchmark.py - High-Volume In-RAM Benchmark Suite
+run_heavy_streaming_benchmark.py - In-RAM Benchmark Suite with Statistical Sampling
 
-Automates multiple runs for high-volume streaming benchmarks (1 GB and 2 GB),
+Automates multiple repeated runs for in-RAM streaming benchmarks,
 collecting latency, throughput, and speedup statistics with Mean ± StdDev.
 """
 
@@ -13,11 +13,8 @@ import sys
 import os
 import time
 import csv
+import argparse
 from collections import defaultdict
-
-DEFAULT_SIZES_MB = [1024, 2048]
-DEFAULT_CHUNK_KB = 1024
-DEFAULT_RUNS = 5
 
 def set_performance_governor():
     """Attempt to set CPU governor to 'performance' on Linux to prevent DVFS jitter."""
@@ -27,8 +24,8 @@ def set_performance_governor():
     except Exception:
         pass
 
-def run_benchmark(size_mb, chunk_kb):
-    cmd = ["sudo", "./host/host_ram_loader", "--stream", str(size_mb), str(chunk_kb)]
+def run_benchmark(size_mb, chunk_kb, sel_pct):
+    cmd = ["sudo", "./host/host_ram_loader", "--stream", str(size_mb), str(chunk_kb), str(sel_pct)]
     
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True)
@@ -61,129 +58,113 @@ def run_benchmark(size_mb, chunk_kb):
 
         elif "Host Data Reduction" in line:
             match = re.findall(r'(\d+\.\d+)%', line)
-            if len(match) >= 3:
-                metrics["data_reduction"] = float(match[1])
+            if match:
+                metrics["data_reduction"] = float(match[0])
 
         elif "In-RAM Speedup vs Host" in line:
-            match = re.search(r'(\d+\.\d+)x faster', line)
+            match = re.search(r':\s*(\d+\.\d+)x', line)
             if match:
                 metrics["speedup_vs_host"] = float(match.group(1))
 
         elif "TRUE CSD vs Host-PCIe" in line:
-            match = re.search(r'(\d+\.\d+)x faster', line)
+            match = re.search(r':\s*(\d+\.\d+)x', line)
             if match:
                 metrics["true_csd_speedup"] = float(match.group(1))
 
     return metrics
 
 def main():
+    parser = argparse.ArgumentParser(description="In-RAM CSD Benchmark Suite with Statistical Sampling")
+    parser.add_argument("--size", type=int, default=100, help="Target data size in MB (default: 100)")
+    parser.add_argument("--chunk", type=int, default=256, help="Chunk size in KB (default: 256)")
+    parser.add_argument("--sel", type=int, default=100, help="Selectivity percentage: 3, 10, 25, 50, 75, 100 (default: 100)")
+    parser.add_argument("--runs", type=int, default=5, help="Number of repetitions for statistical sampling (default: 5)")
+    parser.add_argument("--csv", type=str, default="benchmark_results_repeated.csv", help="Output CSV filename")
+
+    args = parser.parse_args()
+
     if not os.path.exists("./host/host_ram_loader"):
-        print("Error: ./host/host_ram_loader not found. Please run 'make host' first.")
+        print("Error: ./host/host_ram_loader not found. Please run 'make -C host' first.")
         sys.exit(1)
 
-    sizes_mb = DEFAULT_SIZES_MB
-    chunk_kb = DEFAULT_CHUNK_KB
-    runs = DEFAULT_RUNS
-
-    if len(sys.argv) > 1:
-        try:
-            runs = int(sys.argv[1])
-        except ValueError:
-            pass
+    sz = args.size
+    chunk_kb = args.chunk
+    sel_pct = args.sel
+    runs = args.runs
 
     print("==============================================================================================")
-    print("         HIGH-VOLUME IN-RAM STREAMING BENCHMARK SUITE (1 GB & 2 GB STEADY STATE)             ")
+    print("         CSD REPEATED MICRO-BENCHMARK SUITE (STATISTICAL SAMPLING)                            ")
     print("==============================================================================================")
-    print(f"  Target Volumes : {sizes_mb} MB")
+    print(f"  Target Volume  : {sz} MB ({sz / 1024.0:.2f} GB)")
     print(f"  Streaming Chunk: {chunk_kb} KB")
-    print(f"  Repetitions    : {runs} runs per target")
+    print(f"  Selectivity    : {sel_pct}%")
+    print(f"  Repetitions    : {runs} runs")
     print("----------------------------------------------------------------------------------------------")
 
     # Set governor to reduce frequency ramping variance
     set_performance_governor()
 
-    # Warmup run to stabilize caches and bus
-    print("[Warmup] Executing 512 MB warmup run...")
-    run_benchmark(512, chunk_kb)
+    # Warmup run
+    print("[Warmup] Executing warmup run...")
+    run_benchmark(sz, chunk_kb, sel_pct)
     time.sleep(1)
     print("[Warmup] Complete. Commencing measured benchmark suite.\n")
 
-    results = defaultdict(lambda: defaultdict(list))
+    results = defaultdict(list)
 
-    for sz in sizes_mb:
-        gb_label = f"{sz / 1024.0:.1f} GB ({sz} MB)"
-        print(f"\n>>> Benchmarking Volume: {gb_label} across {runs} runs...")
-        for r in range(runs):
-            print(f"  [Run {r + 1}/{runs}] Target: {sz} MB... ", end="", flush=True)
-            t0 = time.time()
-            m = run_benchmark(sz, chunk_kb)
-            elapsed = time.time() - t0
-            print(f"Done in {elapsed:.2f}s | Pipe Throughput: {m['csd_pipe_thru']:.2f} MB/s (Speedup: {m['speedup_vs_host']:.2f}x)")
-            for k, v in m.items():
-                results[sz][k].append(v)
-            # 1 second cooldown to avoid thermal accumulation
-            time.sleep(1)
+    for r in range(runs):
+        print(f"  [Run {r + 1}/{runs}] Benchmarking {sz} MB @ {sel_pct}% selectivity... ", end="", flush=True)
+        t0 = time.time()
+        m = run_benchmark(sz, chunk_kb, sel_pct)
+        elapsed = time.time() - t0
+        print(f"Done in {elapsed:.2f}s | Pipe Thru: {m['csd_pipe_thru']:.2f} MB/s | Host Thru: {m['host_thru']:.2f} MB/s")
+        for k, v in m.items():
+            results[k].append(v)
+        time.sleep(1)
 
     # Print statistical summary
     print("\n\n==============================================================================================")
-    print("               HIGH-VOLUME STREAMING BENCHMARK RESULTS (Mean ± StdDev)                         ")
+    print(f"               BENCHMARK RESULTS: {sz} MB @ {sel_pct}% SELECTIVITY (Mean ± StdDev)            ")
     print("==============================================================================================")
-    print(f"{'Target Size':<14} | {'Mode':<18} | {'Total Time (ms)':<25} | {'Throughput (MB/s)':<25}")
-    print("-" * 90)
+    print(f"{'Mode':<22} | {'Total Time (ms)':<25} | {'Throughput (MB/s)':<25}")
+    print("-" * 80)
 
-    csv_data = []
+    modes = [
+        ("Host In-RAM", "host_time", "host_thru"),
+        ("CSD Sequential", "csd_seq_time", "csd_seq_thru"),
+        ("CSD Pipelined", "csd_pipe_time", "csd_pipe_thru")
+    ]
 
-    for sz in sizes_mb:
-        gb_label = f"{sz / 1024.0:.1f} GB"
-        modes = [
-            ("Host In-RAM", "host_time", "host_thru"),
-            ("CSD Seq (ONFI)", "csd_seq_time", "csd_seq_thru"),
-            ("CSD Pipe (ONFI)", "csd_pipe_time", "csd_pipe_thru")
-        ]
+    for mode_name, time_key, thru_key in modes:
+        t_mean = statistics.mean(results[time_key])
+        t_std = statistics.stdev(results[time_key]) if runs > 1 else 0.0
+        th_mean = statistics.mean(results[thru_key])
+        th_std = statistics.stdev(results[thru_key]) if runs > 1 else 0.0
 
-        for idx, (mode_name, time_key, thru_key) in enumerate(modes):
-            time_mean = statistics.mean(results[sz][time_key])
-            time_std = statistics.stdev(results[sz][time_key]) if runs > 1 else 0.0
+        t_str = f"{t_mean:8.2f} ± {t_std:6.2f}"
+        th_str = f"{th_mean:8.2f} ± {th_std:6.2f}"
+        print(f"{mode_name:<22} | {t_str:<25} | {th_str:<25}")
 
-            thru_mean = statistics.mean(results[sz][thru_key])
-            thru_std = statistics.stdev(results[sz][thru_key]) if runs > 1 else 0.0
+    print("-" * 80)
 
-            time_str = f"{time_mean:8.2f} ± {time_std:6.2f}"
-            thru_str = f"{thru_mean:8.2f} ± {thru_std:6.2f}"
+    pipe_thru_mean = statistics.mean(results["csd_pipe_thru"])
+    host_thru_mean = statistics.mean(results["host_thru"])
+    speedup_mean = statistics.mean(results["speedup_vs_host"])
+    print(f"\nSpeedup Summary:")
+    print(f"  In-RAM Compute Ratio (CSD Pipe / Host): {speedup_mean:.2f}x ({pipe_thru_mean:.2f} MB/s vs {host_thru_mean:.2f} MB/s)")
 
-            size_col = gb_label if idx == 0 else ""
-            print(f"{size_col:<14} | {mode_name:<18} | {time_str:<25} | {thru_str:<25}")
+    # CSV export
+    with open(args.csv, mode="w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["size_mb", "sel_pct", "runs", "mode", "time_mean_ms", "time_std_ms", "thru_mean_mb_s", "thru_std_mb_s"])
+        for mode_name, time_key, thru_key in modes:
+            t_mean = statistics.mean(results[time_key])
+            t_std = statistics.stdev(results[time_key]) if runs > 1 else 0.0
+            th_mean = statistics.mean(results[thru_key])
+            th_std = statistics.stdev(results[thru_key]) if runs > 1 else 0.0
+            writer.writerow([sz, sel_pct, runs, mode_name, round(t_mean, 2), round(t_std, 2), round(th_mean, 2), round(th_std, 2)])
 
-            csv_data.append({
-                "target_mb": sz,
-                "target_gb": sz / 1024.0,
-                "mode": mode_name,
-                "time_mean_ms": round(time_mean, 2),
-                "time_std_ms": round(time_std, 2),
-                "thru_mean_mb_s": round(thru_mean, 2),
-                "thru_std_mb_s": round(thru_std, 2)
-            })
-        print("-" * 90)
-
-    # Summary speedups
-    print("\nSpeedup Summary (CSD Pipelined vs Host):")
-    for sz in sizes_mb:
-        pipe_thru_mean = statistics.mean(results[sz]["csd_pipe_thru"])
-        host_thru_mean = statistics.mean(results[sz]["host_thru"])
-        speedup_mean = statistics.mean(results[sz]["speedup_vs_host"])
-        true_speedup_mean = statistics.mean(results[sz]["true_csd_speedup"])
-        print(f"  {sz / 1024.0:.1f} GB ({sz} MB): In-RAM Speedup = {speedup_mean:.2f}x | TRUE CSD vs Host-PCIe = {true_speedup_mean:.2f}x (Pipe Throughput: {pipe_thru_mean:.2f} MB/s vs Host: {host_thru_mean:.2f} MB/s)")
-
-    # Write to CSV
-    csv_file = "benchmark_heavy_results.csv"
-    with open(csv_file, mode="w", newline="") as f:
-        fieldnames = ["target_mb", "target_gb", "mode", "time_mean_ms", "time_std_ms", "thru_mean_mb_s", "thru_std_mb_s"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in csv_data:
-            writer.writerow(row)
-
-    print(f"\n[INFO] Detailed statistics saved to: {csv_file}")
+    print(f"[INFO] Statistics saved to '{args.csv}'.")
 
 if __name__ == "__main__":
     main()
