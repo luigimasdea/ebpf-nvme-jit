@@ -103,7 +103,8 @@ def main():
     ax2.set_ylim(0, y2_max)
 
     plt.tight_layout()
-    out_path = os.path.join(out_dir, "plot_selectivity_sensitivity.png")
+    out_filename = sys.argv[3] if len(sys.argv) > 3 else "plot_selectivity_sensitivity.png"
+    out_path = os.path.join(out_dir, out_filename)
     plt.savefig(out_path, dpi=300)
     plt.close()
     print(f"Saved: {out_path}")
