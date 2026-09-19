@@ -58,15 +58,19 @@ def main():
 
     ax1.plot(sel, speedup_pcie, 'o-', color=color_spd, linewidth=2.5, markersize=8, label='CSD vs. Storage (Seq Return)')
     ax1.plot(sel, speedup_pipe, '^--', color=color_pipe, linewidth=2.0, markersize=7, label='CSD vs. Storage (Pipe Return)')
+    for x, y in zip(sel, speedup_pipe):
+        ax1.annotate(f"{y:.2f}x", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontweight='bold', color=color_pipe, fontsize=8.5)
     for x, y in zip(sel, speedup_pcie):
-        ax1.annotate(f"{y:.2f}x", (x, y), textcoords="offset points", xytext=(0, 10), ha='center', fontweight='bold', color=color_spd, fontsize=9)
+        offset_x = -14 if x > 90 else 0
+        offset_y = 6 if x > 90 else -14
+        ax1.annotate(f"{y:.2f}x", (x, y), textcoords="offset points", xytext=(offset_x, offset_y), ha='center', fontweight='bold', color=color_spd, fontsize=8.5)
 
     ax1.axhline(1.0, color='gray', linestyle=':', alpha=0.7, label='Break-even (1.0x)')
     ax1.set_xlabel('Filter Selectivity (% of matched records)', fontweight='bold')
     ax1.set_ylabel('End-to-End Speedup (vs. Host Storage)', color=color_spd, fontweight='bold')
     ax1.tick_params(axis='y', labelcolor=color_spd)
-    y_max = max(max(speedup_pcie), max(speedup_pipe)) * 1.15
-    ax1.set_ylim(0.5, y_max)
+    y_max = max(max(speedup_pcie), max(speedup_pipe)) * 1.18
+    ax1.set_ylim(0.0, y_max)
     ax1.set_title('(a) End-to-End Speedup & Bus Reduction Curve', fontweight='bold')
 
     # Twin axis for data reduction
@@ -89,13 +93,14 @@ def main():
     for x, y in zip(sel, host_thru):
         ax2.annotate(f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, 8), ha='center', fontsize=9, color='#d62728')
     for x, y in zip(sel, csd_thru):
-        ax2.annotate(f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, -15), ha='center', fontsize=9, fontweight='bold', color='#1f77b4')
+        ax2.annotate(f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, -14), ha='center', fontsize=9, fontweight='bold', color='#1f77b4')
 
     ax2.set_xlabel('Filter Selectivity (% of matched records)', fontweight='bold')
     ax2.set_ylabel('Effective Throughput (MB/s)', fontweight='bold')
     ax2.set_title('(b) Compute Throughput vs. Output Compaction Load', fontweight='bold')
-    ax2.legend(loc='upper right', frameon=True)
-    ax2.set_ylim(150, 1600)
+    ax2.legend(loc='center right', frameon=True)
+    y2_max = max(max(host_thru), max(csd_thru)) * 1.18
+    ax2.set_ylim(0, y2_max)
 
     plt.tight_layout()
     out_path = os.path.join(out_dir, "plot_selectivity_sensitivity.png")
