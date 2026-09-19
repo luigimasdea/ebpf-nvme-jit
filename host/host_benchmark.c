@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -243,8 +244,8 @@ int main(int argc, char *argv[]) {
         }
 
         // Ensure Core 3 is offline in Linux
-        system("sh -c 'echo 0 > /sys/devices/system/cpu/cpu3/online 2>/dev/null'");
-        system("rmmod vf2_kick 2>/dev/null");
+        (void)system("sh -c 'echo 0 > /sys/devices/system/cpu/cpu3/online 2>/dev/null'");
+        (void)system("rmmod vf2_kick 2>/dev/null");
 
         printf("[BENCH] Kicking Core 3 via OpenSBI HSM...\n");
         int ins_ret = system("insmod tools/kick_core/vf2_kick.ko 2>/dev/null");
