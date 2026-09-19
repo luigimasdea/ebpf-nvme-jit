@@ -34,7 +34,8 @@ def run_benchmark(size_mb, chunk_kb, sel_pct):
         "host_time": 0.0, "csd_pipe_time": 0.0,
         "host_thru": 0.0, "csd_pipe_thru": 0.0,
         "data_reduction": 0.0, "host_mem_recv_mb": 0.0,
-        "speedup_vs_host": 0.0, "true_csd_speedup": 0.0
+        "speedup_vs_host": 0.0, "true_csd_speedup": 0.0,
+        "true_csd_speedup_pipe": 0.0
     }
 
     for line in output.split('\n'):
@@ -67,14 +68,19 @@ def run_benchmark(size_mb, chunk_kb, sel_pct):
                 metrics["host_mem_recv_mb"] = float(match.group(1))
 
         elif "In-RAM Speedup vs Host" in line:
-            match = re.search(r'(\d+\.\d+)x faster', line)
+            match = re.search(r'(\d+\.\d+)x', line)
             if match:
                 metrics["speedup_vs_host"] = float(match.group(1))
 
         elif "TRUE CSD vs Host-PCIe" in line:
-            match = re.search(r'(\d+\.\d+)x faster', line)
+            match = re.search(r'(\d+\.\d+)x', line)
             if match:
                 metrics["true_csd_speedup"] = float(match.group(1))
+
+        elif "TRUE CSD (Pipelined Ret)" in line:
+            match = re.search(r'(\d+\.\d+)x', line)
+            if match:
+                metrics["true_csd_speedup_pipe"] = float(match.group(1))
 
     return metrics
 
@@ -113,16 +119,16 @@ def main():
         t0 = time.time()
         m = run_benchmark(size_mb, chunk_kb, sel)
         elapsed = time.time() - t0
-        print(f"Done in {elapsed:.2f}s | Actual: {m['actual_sel']:.2f}% | Reduction: {m['data_reduction']:.1f}% | CSD Speedup vs Storage: {m['true_csd_speedup']:.2f}x")
+        print(f"Done in {elapsed:.2f}s | Actual: {m['actual_sel']:.2f}% | Reduction: {m['data_reduction']:.1f}% | CSD vs PCIe: {m['true_csd_speedup']:.2f}x (Pipe: {m['true_csd_speedup_pipe']:.2f}x)")
         results.append(m)
         time.sleep(1)
 
     # Print publication summary table
-    print("\n\n==============================================================================================")
-    print("                     SELECTIVITY SENSITIVITY & BREAK-EVEN RESULTS                             ")
-    print("==============================================================================================")
-    print(f"{'Selectivity':<12} | {'Data Reduct':<12} | {'Host Ret MB':<12} | {'Host Thru':<12} | {'CSD Thru':<12} | {'CSD vs PCIe':<12}")
-    print("-" * 88)
+    print("\n\n==========================================================================================================")
+    print("                              SELECTIVITY SENSITIVITY & BREAK-EVEN RESULTS                                ")
+    print("==========================================================================================================")
+    print(f"{'Selectivity':<12} | {'Data Reduct':<12} | {'Host Ret MB':<12} | {'Host Thru':<12} | {'CSD Thru':<12} | {'CSD vs PCIe':<12} | {'Pipe Ret Spd':<12}")
+    print("-" * 106)
 
     for r in results:
         sel_str = f"{r['actual_sel']:.2f}%"
@@ -131,16 +137,17 @@ def main():
         host_str = f"{r['host_thru']:.1f} MB/s"
         csd_str = f"{r['csd_pipe_thru']:.1f} MB/s"
         spd_str = f"{r['true_csd_speedup']:.2f}x"
-        print(f"{sel_str:<12} | {red_str:<12} | {ret_str:<12} | {host_str:<12} | {csd_str:<12} | {spd_str:<12}")
+        pipe_str = f"{r['true_csd_speedup_pipe']:.2f}x"
+        print(f"{sel_str:<12} | {red_str:<12} | {ret_str:<12} | {host_str:<12} | {csd_str:<12} | {spd_str:<12} | {pipe_str:<12}")
 
-    print("-" * 88)
+    print("-" * 106)
 
     # CSV export
     csv_file = "benchmark_selectivity_results.csv"
     with open(csv_file, mode="w", newline="") as f:
         fieldnames = ["target_mb", "sel_target_pct", "actual_sel_pct", "data_reduction_pct", "host_recv_mb",
                       "host_time_ms", "csd_pipe_time_ms", "host_thru_mb_s", "csd_pipe_thru_mb_s",
-                      "speedup_vs_host_ram", "true_csd_speedup_vs_pcie"]
+                      "speedup_vs_host_ram", "true_csd_speedup_vs_pcie", "true_csd_pipe_speedup_vs_pcie"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in results:
@@ -155,7 +162,8 @@ def main():
                 "host_thru_mb_s": round(r["host_thru"], 1),
                 "csd_pipe_thru_mb_s": round(r["csd_pipe_thru"], 1),
                 "speedup_vs_host_ram": round(r["speedup_vs_host"], 2),
-                "true_csd_speedup_vs_pcie": round(r["true_csd_speedup"], 2)
+                "true_csd_speedup_vs_pcie": round(r["true_csd_speedup"], 2),
+                "true_csd_pipe_speedup_vs_pcie": round(r["true_csd_speedup_pipe"], 2)
             })
 
     print(f"\n[INFO] Selectivity sweep data saved to: {csv_file}")

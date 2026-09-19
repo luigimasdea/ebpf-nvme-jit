@@ -37,7 +37,8 @@ def run_benchmark(size_mb, chunk_kb, sel_pct):
     metrics = {
         "host_time": 0.0, "csd_seq_time": 0.0, "csd_pipe_time": 0.0,
         "host_thru": 0.0, "csd_seq_thru": 0.0, "csd_pipe_thru": 0.0,
-        "data_reduction": 0.0, "speedup_vs_host": 0.0, "true_csd_speedup": 0.0
+        "data_reduction": 0.0, "speedup_vs_host": 0.0, "true_csd_speedup": 0.0,
+        "true_csd_speedup_pipe": 0.0
     }
 
     # Parse output table
@@ -70,6 +71,11 @@ def run_benchmark(size_mb, chunk_kb, sel_pct):
             match = re.search(r':\s*(\d+\.\d+)x', line)
             if match:
                 metrics["true_csd_speedup"] = float(match.group(1))
+
+        elif "TRUE CSD (Pipelined Ret)" in line:
+            match = re.search(r':\s*(\d+\.\d+)x', line)
+            if match:
+                metrics["true_csd_speedup_pipe"] = float(match.group(1))
 
     return metrics
 
@@ -152,6 +158,11 @@ def main():
     speedup_mean = statistics.mean(results["speedup_vs_host"])
     print(f"\nSpeedup Summary:")
     print(f"  In-RAM Compute Ratio (CSD Pipe / Host): {speedup_mean:.2f}x ({pipe_thru_mean:.2f} MB/s vs {host_thru_mean:.2f} MB/s)")
+    if "true_csd_speedup" in results and results["true_csd_speedup"]:
+        true_csd_mean = statistics.mean(results["true_csd_speedup"])
+        pipe_ret_mean = statistics.mean(results["true_csd_speedup_pipe"]) if "true_csd_speedup_pipe" in results and results["true_csd_speedup_pipe"] else 0.0
+        print(f"  True CSD vs Host-PCIe (Sequential Ret): {true_csd_mean:.2f}x")
+        print(f"  True CSD vs Host-PCIe (Pipelined Ret) : {pipe_ret_mean:.2f}x")
 
     # CSV export
     with open(args.csv, mode="w", newline="") as f:

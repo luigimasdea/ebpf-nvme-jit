@@ -770,7 +770,18 @@ int main(int argc, char *argv[]) {
     double host_pcie_rate_mb_s = 132.86;
     double host_storage_io_ms = ((double)file_bytes / (1024.0 * 1024.0)) / (host_pcie_rate_mb_s / 1000.0);
     double host_storage_baseline_ms = host_storage_io_ms + host_res.compute_time_ms;
-    double true_csd_speedup = host_storage_baseline_ms / pipe_res.total_time_ms;
+
+    // Realistic PCIe Return Channel Model:
+    // Filtered/compacted records transferred from CSD to Host memory across PCIe bus
+    double csd_return_io_ms = ((double)pipe_res.host_mem_traffic_bytes / (1024.0 * 1024.0)) / (host_pcie_rate_mb_s / 1000.0);
+
+    // Sequential Return Model: CSD compute finishes, then matched records return over PCIe
+    double csd_seq_with_pcie_ms = pipe_res.total_time_ms + csd_return_io_ms;
+    double true_csd_speedup_seq = host_storage_baseline_ms / csd_seq_with_pcie_ms;
+
+    // Pipelined Return Model: PCIe DMA returns matched records concurrently with CSD chunk execution
+    double csd_pipe_with_pcie_ms = (pipe_res.total_time_ms > csd_return_io_ms) ? pipe_res.total_time_ms : csd_return_io_ms;
+    double true_csd_speedup_pipe = host_storage_baseline_ms / csd_pipe_with_pcie_ms;
 
     printf("====================================================================\n");
     printf("[FINAL COMPARISON: IN-RAM ARCHITECTURAL MODEL]\n");
@@ -792,8 +803,12 @@ int main(int argc, char *argv[]) {
            data_reduction_pct, data_reduction_pct);
     printf("  ------------------------+------------------+------------------+------------------\n");
     printf("  In-RAM Speedup vs Host  : %.2fx faster (%.1f%% latency reduction)\n", pipe_speedup, lat_reduct);
-    printf("  TRUE CSD vs Host-PCIe   : %.2fx faster! (%.2f ms CSD vs %.2f ms Host over PCIe)\n",
-           true_csd_speedup, pipe_res.total_time_ms, host_storage_baseline_ms);
+    printf("  CSD PCIe Return IO Time : %10.2f ms (%.2f MB matched data at %.2f MB/s)\n",
+           csd_return_io_ms, (double)pipe_res.host_mem_traffic_bytes / (1024.0 * 1024.0), host_pcie_rate_mb_s);
+    printf("  TRUE CSD vs Host-PCIe   : %.2fx (%.2f ms CSD w/ PCIe return vs %.2f ms Host baseline)\n",
+           true_csd_speedup_seq, csd_seq_with_pcie_ms, host_storage_baseline_ms);
+    printf("  TRUE CSD (Pipelined Ret): %.2fx (%.2f ms CSD overlapped vs %.2f ms Host baseline)\n",
+           true_csd_speedup_pipe, csd_pipe_with_pcie_ms, host_storage_baseline_ms);
     printf("  Host Memory Bus Saved   : %.1f%% of raw data discarded at storage level!\n", data_reduction_pct);
 
     // Mathematical verification across all modes
