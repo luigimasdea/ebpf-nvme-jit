@@ -25,7 +25,7 @@ def set_performance_governor():
         pass
 
 def run_benchmark(size_mb, chunk_kb, sel_pct):
-    cmd = ["sudo", "./host/host_ram_loader", "--stream", str(size_mb), str(chunk_kb), str(sel_pct)]
+    cmd = ["sudo", "./host/host_loader", "--stream", str(size_mb), str(chunk_kb), str(sel_pct)]
     
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True)
@@ -89,8 +89,8 @@ def main():
 
     args = parser.parse_args()
 
-    if not os.path.exists("./host/host_ram_loader"):
-        print("Error: ./host/host_ram_loader not found. Please run 'make -C host' first.")
+    if not os.path.exists("./host/host_loader"):
+        print("Error: ./host/host_loader not found. Please run 'make -C host' first.")
         sys.exit(1)
 
     sz = args.size

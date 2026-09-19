@@ -1,17 +1,20 @@
 /**
- * host_ram_loader.c - In-RAM TP4091 Computational Storage Data Loader
+ * host_loader.c - Unified TP4091 Computational Storage Data Loader & Benchmark
  *
- * Simulates an Integrated Computational Storage Drive (CSD) where the flash
- * memory is directly attached to the controller via an internal ONFI 5.0 bus
- * (or high-speed crossbar), removing the PCIe x1 bottleneck.
+ * Supports two execution paradigms:
+ * 1. In-RAM Architectural Model (--stream / --ram):
+ *    Emulates an integrated CSD where flash is connected to the controller via
+ *    an internal ONFI 5.0 bus (simulated via in-memory DMA memcpy ~80 µs / 256KB).
+ *    Models PCIe storage baseline and realistic PCIe return channel transfer.
+ * 2. Physical NVMe Storage Model (--disk <path>):
+ *    Reads dataset from an ext4 filesystem on an M.2 NVMe SSD via pread(),
+ *    measuring real-world Host Traditional vs CSD Sequential vs CSD Pipelined.
  *
- * Demonstrates:
- * 1. Zero PCIe Bottleneck: Entire dataset is pre-loaded into RAM before timing.
- * 2. Simulated ONFI Flash-to-SRAM DMA: Chunk transfers into SLM are performed via
- *    in-memory memcpy (~80 µs for 256KB), perfectly matching real ONFI bus latencies (~100 µs).
- * 3. Double-Buffered Pipelining: Overlaps internal flash fetch with Core 3 eBPF JIT execution.
- * 4. Comprehensive Comparison: Evaluates Host In-RAM vs CSD In-RAM, as well as
- *    comparing against Host-Centric Storage over PCIe (demonstrating the ~4x architectural speedup).
+ * Key Capabilities:
+ * - Double-Buffered Pipelining: Overlaps chunk I/O with Core 3 eBPF JIT execution.
+ * - In-place Stream Compaction: Core 3 filters records in SLM; Host receives only matches.
+ * - Deterministic QoS Testing: Optional --contention flag to stress host CPU.
+ * - Integrated VCON: Virtual Console drain for Core 3 firmware diagnostics.
  */
 
 #define _GNU_SOURCE
@@ -49,7 +52,6 @@
 
 #define FW_BINARY           "firmware/build/firmware.bin"
 #define DEFAULT_APP_BIN     "apps/analytics_advanced.bin"
-
 #define DEFAULT_CHUNK_KB    256 // Default streaming chunk: 256 KB
 
 struct record {
@@ -97,158 +99,175 @@ struct query_summary {
     uint64_t host_mem_traffic_bytes;
 };
 
+enum data_source {
+    SOURCE_RAM,
+    SOURCE_DISK
+};
+
 static inline double get_time_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+    return (ts.tv_sec * 1000.0) + (ts.tv_nsec / 1000000.0);
 }
 
-// Host-Native aggregation baseline (identical logic to eBPF)
-static void host_native_advanced_filter(const struct record *records, uint32_t count,
-                                       uint32_t target_type, uint32_t min_amt, uint32_t max_amt,
-                                       uint32_t min_ts, uint32_t max_ts, uint32_t disc_pct,
-                                       struct record *out_matches_buf, uint32_t *out_match_count,
-                                       uint64_t *out_sum, uint64_t *out_net_sum,
-                                       uint32_t *out_min, uint32_t *out_max, uint32_t *out_hash) {
-    uint32_t matches = 0;
-    uint64_t sum = 0;
-    uint64_t net_sum = 0;
-    uint32_t max_v = *out_max;
-    uint32_t min_v = *out_min;
-    uint32_t hash = 0x811C9DC5; // FNV-1a 32-bit offset basis per chunk, matching eBPF exactly
-    uint32_t multiplier = (disc_pct < 100) ? (100 - disc_pct) : 100;
-
-    for (uint32_t i = 0; i < count; i++) {
-        uint32_t r_id = records[i].id;
-        uint32_t r_type = records[i].type;
-        uint32_t r_amt = records[i].amount;
-        uint32_t r_ts = records[i].timestamp;
-
-        if ((target_type == 0 || r_type == target_type) &&
-            r_amt >= min_amt && r_amt <= max_amt &&
-            r_ts >= min_ts && r_ts <= max_ts) {
-
-            if (out_matches_buf) {
-                out_matches_buf[matches] = records[i];
-            }
-
-            matches++;
-            sum += r_amt;
-
-            uint32_t net_val = (r_amt * multiplier) / 100;
-            net_sum += net_val;
-
-            if (r_amt > max_v) max_v = r_amt;
-            if (r_amt < min_v) min_v = r_amt;
-
-            hash ^= r_id;
-            hash = (hash * 16777619) ^ (r_amt << 1);
-            hash ^= (r_ts >> 3);
-        }
-    }
-
-    *out_match_count = matches;
-    *out_sum += sum;
-    *out_net_sum += net_sum;
-    *out_min = min_v;
-    *out_max = max_v;
-    *out_hash ^= hash;
-}
-
+// Virtual Console pointers
 static volatile uint32_t *vcon_idx = NULL;
 static volatile char *vcon_buf = NULL;
+static uint32_t last_vcon_read = 0;
 
 static void drain_vcon(void) {
     if (!vcon_idx || !vcon_buf) return;
-    static uint32_t last_idx = 0;
-    uint32_t cur = *vcon_idx;
-    while (last_idx < cur) {
-        putchar(vcon_buf[last_idx % (VCON_SIZE - 4)]);
-        last_idx++;
+    uint32_t current_idx = *vcon_idx;
+    while (last_vcon_read < current_idx) {
+        char c = vcon_buf[last_vcon_read % (VCON_SIZE - 8)];
+        putchar(c);
+        last_vcon_read++;
     }
     fflush(stdout);
 }
 
+// Background contention worker simulation
+static volatile bool stop_contention = false;
+static void *contention_worker(void *arg) {
+    volatile uint64_t val = 123456789;
+    while (!stop_contention) {
+        for (int i = 0; i < 100000; i++) {
+            val = val * 6364136223846793005ULL + 1;
+        }
+    }
+    return NULL;
+}
+
+// Submit NVMe Command & Poll for CQE
 static int submit_nvme_cmd_silent(volatile struct nvme_queue_mem *qmem,
                                   struct nvme_sqe *cmd,
                                   struct nvme_cqe *out_cqe,
                                   int timeout_ms) {
     uint32_t tail = qmem->regs.sq_tail;
-    uint32_t head = qmem->regs.sq_head;
-
-    if ((tail - head) >= NVME_QUEUE_DEPTH) {
-        qmem->regs.sq_tail = head;
-        tail = head;
-        __sync_synchronize();
-    }
-
-    uint32_t sq_idx = tail % NVME_QUEUE_DEPTH;
-    qmem->sq[sq_idx] = *cmd;
-
+    qmem->sq[tail % NVME_QUEUE_DEPTH] = *cmd;
     __sync_synchronize();
     qmem->regs.sq_tail = tail + 1;
     __sync_synchronize();
 
-    double start_t = get_time_ms();
-    while ((get_time_ms() - start_t) < timeout_ms) {
+    double t0 = get_time_ms();
+    while ((get_time_ms() - t0) < timeout_ms) {
         if (qmem->regs.cq_tail != qmem->regs.cq_head) {
             uint32_t cq_idx = qmem->regs.cq_head % NVME_QUEUE_DEPTH;
             struct nvme_cqe cqe = qmem->cq[cq_idx];
-
             if (cqe.cid == cmd->cid) {
                 *out_cqe = cqe;
                 qmem->regs.cq_head++;
                 __sync_synchronize();
                 return 0;
-            } else {
-                qmem->regs.cq_head++;
-                __sync_synchronize();
             }
         }
     }
+    return -2; // Timeout
+}
 
-    fprintf(stderr, "[HOST ERROR] Command cid=%d timed out after %d ms!\n", cmd->cid, timeout_ms);
-    return -2;
+static void drop_page_cache(void) {
+    sync();
+    int fd = open("/proc/sys/vm/drop_caches", O_WRONLY);
+    if (fd >= 0) {
+        if (write(fd, "3\n", 2) < 0) {
+            // Ignore if running without root write permission
+        }
+        close(fd);
+    }
+}
+
+// Pure Host C Query Function
+static void run_host_query_batch(const struct record *records, uint32_t count,
+                                 uint32_t target_type, uint32_t min_amt, uint32_t max_amt,
+                                 uint32_t min_ts, uint32_t max_ts, uint32_t disc_pct,
+                                 struct record *out_matches, uint32_t *out_matches_count,
+                                 struct query_summary *summary) {
+    uint32_t local_matches = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        struct record r = records[i];
+        if (r.type == target_type &&
+            r.amount >= min_amt && r.amount <= max_amt &&
+            r.timestamp >= min_ts && r.timestamp <= max_ts) {
+
+            uint32_t net = (r.amount * (100 - disc_pct)) / 100;
+            summary->sum_amount += r.amount;
+            summary->net_discount_sum += net;
+            if (r.amount < summary->min_amount) summary->min_amount = r.amount;
+            if (r.amount > summary->max_amount) summary->max_amount = r.amount;
+
+            // FNV-1a Hash
+            summary->hash_accum ^= r.id;
+            summary->hash_accum *= 16777619;
+            summary->hash_accum ^= r.amount;
+            summary->hash_accum *= 16777619;
+
+            if (out_matches) {
+                out_matches[local_matches] = r;
+            }
+            local_matches++;
+        }
+    }
+    summary->matches += local_matches;
+    if (out_matches_count) *out_matches_count = local_matches;
+}
+
+static void print_usage(const char *prog) {
+    printf("Usage:\n");
+    printf("  In-RAM CSD Mode (ONFI Model):\n");
+    printf("    %s --stream <size_mb> [chunk_kb] [sel_pct]\n", prog);
+    printf("    %s --ram <size_mb> [chunk_kb] [sel_pct]\n", prog);
+    printf("  Physical NVMe Storage Mode (pread):\n");
+    printf("    %s --disk <file.bin> [chunk_kb] [sel_pct] [--contention]\n", prog);
+    printf("    %s <file.bin> [chunk_kb] [sel_pct] [--contention]\n", prog);
+    printf("\nOptions:\n");
+    printf("  --contention, -c   Run background CPU worker on Host to test QoS\n");
+    printf("  --vcon             Drain and display Core 3 Virtual Console debug log\n");
 }
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("Usage: %s <dataset_file.bin | --stream [size_MB]> [chunk_size_KB]\n", argv[0]);
-        printf("Examples:\n");
-        printf("  %s /mnt/nvme/dataset_1m.bin 256\n", argv[0]);
-        printf("  %s --stream 1024 1024   (1 GB streaming benchmark with 1024 KB chunks)\n", argv[0]);
-        printf("  %s --stream 2048 1024   (2 GB streaming benchmark with 1024 KB chunks)\n", argv[0]);
+        print_usage(argv[0]);
         return 1;
     }
 
-    bool is_stream_mode = false;
-    uint64_t stream_mb = 1024;
+    enum data_source src = SOURCE_DISK;
     const char *dataset_path = NULL;
+    uint64_t stream_mb = 100;
     uint32_t chunk_kb = DEFAULT_CHUNK_KB;
-    uint32_t sel_pct = 3;
+    uint32_t sel_pct = 3; // Default 3% selectivity
+    bool contention_enabled = false;
+    bool show_vcon = false;
 
-    if (strcmp(argv[1], "--stream") == 0 || strcmp(argv[1], "-s") == 0) {
-        is_stream_mode = true;
-        if (argc >= 3 && atoi(argv[2]) > 0) {
-            stream_mb = (uint64_t)atoi(argv[2]);
+    // Parse options
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--contention") == 0 || strcmp(argv[i], "-c") == 0) {
+            contention_enabled = true;
+        } else if (strcmp(argv[i], "--vcon") == 0) {
+            show_vcon = true;
         }
-        if (argc >= 4 && atoi(argv[3]) > 0) {
-            chunk_kb = (uint32_t)atoi(argv[3]);
-        } else {
-            chunk_kb = 1024; // Default to 1024 KB sweet spot for heavy streaming
+    }
+
+    // Determine mode
+    if (strcmp(argv[1], "--stream") == 0 || strcmp(argv[1], "--ram") == 0) {
+        src = SOURCE_RAM;
+        if (argc >= 3 && atoi(argv[2]) > 0) stream_mb = (uint64_t)atoi(argv[2]);
+        if (argc >= 4 && atoi(argv[3]) > 0) chunk_kb = (uint32_t)atoi(argv[3]);
+        if (argc >= 5 && atoi(argv[4]) > 0) sel_pct = (uint32_t)atoi(argv[4]);
+    } else if (strcmp(argv[1], "--disk") == 0) {
+        src = SOURCE_DISK;
+        if (argc < 3) {
+            print_usage(argv[0]);
+            return 1;
         }
-        if (argc >= 5 && atoi(argv[4]) > 0) {
-            sel_pct = (uint32_t)atoi(argv[4]);
-        }
+        dataset_path = argv[2];
+        if (argc >= 4 && atoi(argv[3]) > 0) chunk_kb = (uint32_t)atoi(argv[3]);
+        if (argc >= 5 && atoi(argv[4]) > 0) sel_pct = (uint32_t)atoi(argv[4]);
     } else {
+        // Positional dataset file
+        src = SOURCE_DISK;
         dataset_path = argv[1];
-        if (argc >= 3) {
-            int val = atoi(argv[2]);
-            if (val > 0) chunk_kb = val;
-        }
-        if (argc >= 4 && atoi(argv[3]) > 0) {
-            sel_pct = (uint32_t)atoi(argv[3]);
-        }
+        if (argc >= 3 && atoi(argv[2]) > 0) chunk_kb = (uint32_t)atoi(argv[2]);
+        if (argc >= 4 && atoi(argv[3]) > 0) sel_pct = (uint32_t)atoi(argv[3]);
     }
 
     if (chunk_kb < 16) chunk_kb = 16;
@@ -262,16 +281,17 @@ int main(int argc, char *argv[]) {
     uint64_t total_records = 0;
     uint64_t template_bytes = 0;
     uint8_t *raw_dataset = NULL;
+    int disk_fd = -1;
 
     printf("====================================================================\n");
-    if (is_stream_mode) {
-        printf("[ARCHITECTURAL IN-RAM CSD HEAVY STREAMING BENCHMARK (ONFI MODEL)]\n");
+    if (src == SOURCE_RAM) {
+        printf("[UNIFIED CSD LOADER: IN-RAM STREAMING ARCHITECTURE (ONFI MODEL)]\n");
     } else {
-        printf("[ARCHITECTURAL IN-RAM CSD BENCHMARK: SIMULATED ONFI BUS PIPELINE]\n");
+        printf("[UNIFIED CSD LOADER: PHYSICAL STORAGE BENCHMARK (NVMe/ext4 pread)]\n");
     }
     printf("====================================================================\n");
 
-    if (is_stream_mode) {
+    if (src == SOURCE_RAM) {
         file_bytes = stream_mb * 1024ULL * 1024ULL;
         total_records = file_bytes / sizeof(struct record);
         template_bytes = (file_bytes < 16 * 1024 * 1024ULL) ? file_bytes : (16 * 1024 * 1024ULL);
@@ -317,78 +337,59 @@ int main(int argc, char *argv[]) {
         printf("  Dataset Size      : %.2f MB (%lu bytes, %lu records)\n",
                (double)file_bytes / (1024.0 * 1024.0), (unsigned long)file_bytes, (unsigned long)total_records);
         printf("  Streaming Chunk   : %u KB (%u records / chunk)\n", chunk_kb, chunk_records);
-        printf("  Internal Bus Sim  : Memory DMA memcpy (~80 µs / chunk, mirrors ONFI 5.0)\n");
-        printf("  Pre-loading dataset into RAM... ");
-        fflush(stdout);
-
-        int disk_fd = open(dataset_path, O_RDONLY);
-        if (disk_fd < 0) {
-            perror("open dataset");
-            return 1;
-        }
-        raw_dataset = malloc(file_bytes);
-        if (!raw_dataset) {
-            fprintf(stderr, "Out of memory allocating %lu bytes\n", (unsigned long)file_bytes);
-            close(disk_fd);
-            return 1;
-        }
-        ssize_t total_rd = 0;
-        while ((uint64_t)total_rd < file_bytes) {
-            ssize_t rd = read(disk_fd, raw_dataset + total_rd, file_bytes - total_rd);
-            if (rd <= 0) break;
-            total_rd += rd;
-        }
-        close(disk_fd);
-        printf("Done (%zd bytes in Host RAM).\n", total_rd);
+        printf("  Host Contention   : %s\n", contention_enabled ? "ACTIVE (Host background worker running)" : "OFF");
     }
-    printf("====================================================================\n\n");
 
-    uint32_t QUERY_TYPE = 1;       // SALE
-    uint32_t QUERY_MIN_AMT = 50;   // Selective window [50, 150]
+    // Configure query predicates based on selectivity
+    uint32_t QUERY_TYPE = 1;
+    uint32_t QUERY_MIN_AMT = 50;
     uint32_t QUERY_MAX_AMT = 150;
-    uint32_t QUERY_MIN_TS = 0;
-    uint32_t QUERY_MAX_TS = 0xFFFFFFFF;
-    uint32_t QUERY_DISC_PCT = 15; // 15% discount
+    uint32_t QUERY_MIN_TS  = 1699999999;
+    uint32_t QUERY_MAX_TS  = 1700086401;
+    uint32_t QUERY_DISC_PCT = 15;
 
-    if (sel_pct == 3) {
-        QUERY_TYPE = 1; QUERY_MIN_AMT = 50; QUERY_MAX_AMT = 150; // ~3.37%
-    } else if (sel_pct <= 10) {
-        QUERY_TYPE = 1; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 300;  // ~10.0%
-    } else if (sel_pct <= 25) {
-        QUERY_TYPE = 1; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 750;  // ~25.0%
-    } else if (sel_pct <= 33) {
-        QUERY_TYPE = 1; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 1000; // ~33.3%
-    } else if (sel_pct <= 50) {
-        QUERY_TYPE = 0; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 500;  // ~50.0% (wildcard type)
-    } else if (sel_pct <= 75) {
-        QUERY_TYPE = 0; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 750;  // ~75.0% (wildcard type)
-    } else {
-        QUERY_TYPE = 0; QUERY_MIN_AMT = 1; QUERY_MAX_AMT = 1000; // ~100.0% (wildcard type, all pass)
+    if (sel_pct == 100) {
+        QUERY_TYPE = 0; // Match all types
+        QUERY_MIN_AMT = 0;
+        QUERY_MAX_AMT = 2000;
+    } else if (sel_pct >= 75) {
+        QUERY_TYPE = 0;
+        QUERY_MIN_AMT = 1;
+        QUERY_MAX_AMT = 750;
+    } else if (sel_pct >= 50) {
+        QUERY_TYPE = 0;
+        QUERY_MIN_AMT = 1;
+        QUERY_MAX_AMT = 500;
+    } else if (sel_pct >= 25) {
+        QUERY_TYPE = 0;
+        QUERY_MIN_AMT = 1;
+        QUERY_MAX_AMT = 250;
+    } else if (sel_pct >= 10) {
+        QUERY_TYPE = 1;
+        QUERY_MIN_AMT = 1;
+        QUERY_MAX_AMT = 300;
     }
 
-    printf("  [QUERY CONFIG] Selectivity: ~%u%% | Type: %s | Amount Range: [%u, %u]\n\n",
-           sel_pct, (QUERY_TYPE == 0) ? "ANY (Wildcard)" : "SALE (Type 1)", QUERY_MIN_AMT, QUERY_MAX_AMT);
+    printf("  Query Selectivity : ~%u%% (Type=%u, Amt=[%u..%u], Disc=%u%%)\n\n",
+           sel_pct, QUERY_TYPE, QUERY_MIN_AMT, QUERY_MAX_AMT, QUERY_DISC_PCT);
 
-    // Open physical memory mapping to CSD
+    // Map Shared Memory
     int mem_fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (mem_fd < 0) {
-        perror("Error opening /dev/mem");
-        free(raw_dataset);
+        perror("open /dev/mem");
         return 1;
     }
 
     uint8_t *map_base = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, PHYS_BASE);
     if (map_base == MAP_FAILED) {
-        perror("Error mmapping /dev/mem");
+        perror("mmap");
         close(mem_fd);
-        free(raw_dataset);
         return 1;
     }
 
     vcon_idx = (volatile uint32_t *)(map_base + VCON_OFFSET + VCON_SIZE - 4);
     vcon_buf = (volatile char *)(map_base + VCON_OFFSET);
     volatile struct nvme_queue_mem *qmem = (volatile struct nvme_queue_mem *)(map_base + NVME_QUEUE_OFFSET);
-    uint8_t *slm_prog = map_base + SLM_PROG_OFFSET;
     struct advanced_context *ctx_a = (struct advanced_context *)(map_base + SLM_BUF_A_OFFSET);
     struct advanced_context *ctx_b = (struct advanced_context *)(map_base + SLM_BUF_B_OFFSET);
 
@@ -434,7 +435,7 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "\n[HOST ERROR] Timeout waiting for Core 3 READY status!\n");
                 munmap(map_base, MAP_SIZE);
                 close(mem_fd);
-                free(raw_dataset);
+                if (raw_dataset) free(raw_dataset);
                 return 1;
             }
         }
@@ -442,7 +443,11 @@ int main(int argc, char *argv[]) {
         printf("[HOST] Core 3 is READY! Initializing TP4091 Controller...\n");
     }
 
-    // Load Advanced eBPF Program into SLM
+    struct nvme_sqe sqe;
+    struct nvme_cqe cqe;
+    uint16_t cid = 100;
+
+    // Load & Activate eBPF Program
     const char *app_path = DEFAULT_APP_BIN;
     int app_fd = open(app_path, O_RDONLY);
     if (app_fd < 0) {
@@ -450,101 +455,124 @@ int main(int argc, char *argv[]) {
         app_fd = open(app_path, O_RDONLY);
     }
     if (app_fd < 0) {
-        perror("Error opening eBPF application binary");
-        munmap(map_base, MAP_SIZE);
-        close(mem_fd);
-        free(raw_dataset);
+        fprintf(stderr, "[ERROR] Cannot open eBPF application: %s\n", DEFAULT_APP_BIN);
         return 1;
     }
-    ssize_t app_sz = read(app_fd, slm_prog, 0x10000);
-    close(app_fd);
-    printf("[HOST] Loaded %zd bytes of advanced eBPF bytecode into SLM (0x%llX).\n",
-           app_sz, (unsigned long long)SLM_PROG_PHYS_ADDR);
 
-    // TP4091 LOAD
-    struct nvme_sqe sqe;
-    struct nvme_cqe cqe;
+    uint8_t *prog_slm = map_base + SLM_PROG_OFFSET;
+    ssize_t prog_len = read(app_fd, prog_slm, 65536);
+    close(app_fd);
+    __sync_synchronize();
+
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_EBPF_LOAD;
-    sqe.flags = NVME_FLAG_SILENT;
-    sqe.cid = 1;
+    sqe.cid = ++cid;
     sqe.prp1 = SLM_PROG_PHYS_ADDR;
-    sqe.cdw10 = (uint32_t)app_sz;
-
+    sqe.cdw10 = (uint32_t)prog_len;
     if (submit_nvme_cmd_silent(qmem, &sqe, &cqe, 1000) != 0 || cqe.status != 0) {
-        fprintf(stderr, "[HOST ERROR] TP4091 LOAD command failed!\n");
+        fprintf(stderr, "[ERROR] EBPF_LOAD command failed!\n");
+        drain_vcon();
         return 1;
     }
 
-    // TP4091 ACTIVATE
     memset(&sqe, 0, sizeof(sqe));
     sqe.opcode = NVME_CMD_EBPF_ACTIVATE;
-    sqe.flags = NVME_FLAG_SILENT;
-    sqe.cid = 2;
-    double t_act_start = get_time_ms();
+    sqe.cid = ++cid;
     if (submit_nvme_cmd_silent(qmem, &sqe, &cqe, 1000) != 0 || cqe.status != 0) {
-        fprintf(stderr, "[HOST ERROR] TP4091 ACTIVATE command failed!\n");
+        fprintf(stderr, "[ERROR] EBPF_ACTIVATE command failed!\n");
+        drain_vcon();
         return 1;
     }
-    double t_act_end = get_time_ms();
-    printf("[HOST] Advanced eBPF Program JIT-compiled on Core 3 (JIT latency: %.2f µs, cycles: %u)\n\n",
-           (t_act_end - t_act_start) * 1000.0, cqe.rsvd1);
 
-    // Destination memory for filtered query results
-    size_t match_alloc = (total_records <= 2000000) ? (total_records * sizeof(struct record)) : (chunk_bytes * 2);
-    struct record *host_matched_records = malloc(match_alloc);
-    struct record *csd_matched_records = malloc(match_alloc);
-    struct record *pipe_matched_records = malloc(match_alloc);
+    // Allocate result buffers (cap to 2 million records for RAM conservation)
+    uint64_t max_out_records = (total_records <= 2000000) ? total_records : 2000000;
+    struct record *host_matched_records = malloc(max_out_records * sizeof(struct record));
+    struct record *csd_matched_records = malloc(max_out_records * sizeof(struct record));
+    struct record *pipe_matched_records = malloc(max_out_records * sizeof(struct record));
+    if (!host_matched_records || !csd_matched_records || !pipe_matched_records) {
+        fprintf(stderr, "[ERROR] Failed allocating matched record buffers\n");
+        return 1;
+    }
+
+    // Optional contention worker
+    pthread_t contention_th;
+    if (contention_enabled) {
+        stop_contention = false;
+        pthread_create(&contention_th, NULL, contention_worker, NULL);
+    }
 
     // =========================================================================
-    // EXPERIMENT 1: HOST-CENTRIC IN-RAM BASELINE (Direct Memory Access)
+    // EXPERIMENT 1: HOST BASELINE EXECUTION
     // =========================================================================
     printf("--------------------------------------------------------------------\n");
-    printf("[EXPERIMENT 1] Host-Centric In-RAM Baseline (Direct Host Memory Compute)\n");
+    if (src == SOURCE_RAM) {
+        printf("[EXPERIMENT 1] Host In-RAM Query Processing (GCC -O2 Native)\n");
+    } else {
+        printf("[EXPERIMENT 1] Host Traditional Processing (pread + GCC -O2 Native)\n");
+    }
     printf("--------------------------------------------------------------------\n");
 
     struct query_summary host_res = {0};
     host_res.min_amount = 0xFFFFFFFF;
     host_res.hash_accum = 0x811C9DC5;
 
+    if (src == SOURCE_DISK) {
+        drop_page_cache();
+        disk_fd = open(dataset_path, O_RDONLY);
+        if (disk_fd < 0) {
+            perror("open dataset for host read");
+            return 1;
+        }
+    }
+
     double host_t0 = get_time_ms();
     uint64_t bytes_left = file_bytes;
-    off_t file_offset = 0;
+    uint64_t file_offset = 0;
+    struct record *host_raw_chunk = (src == SOURCE_DISK) ? malloc(chunk_bytes) : NULL;
 
     while (bytes_left > 0) {
         uint32_t to_read = (bytes_left > chunk_bytes) ? chunk_bytes : (uint32_t)bytes_left;
         uint32_t records_in_batch = to_read / sizeof(struct record);
 
-        uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
-        const struct record *chunk_ptr = (const struct record *)(raw_dataset + template_offset);
+        const struct record *records_ptr = NULL;
+        if (src == SOURCE_RAM) {
+            uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
+            records_ptr = (const struct record *)(raw_dataset + template_offset);
+        } else {
+            double t_io0 = get_time_ms();
+            ssize_t rd = pread(disk_fd, host_raw_chunk, to_read, file_offset);
+            double t_io1 = get_time_ms();
+            host_res.io_time_ms += (t_io1 - t_io0);
+            if (rd != (ssize_t)to_read) break;
+            records_ptr = host_raw_chunk;
+        }
 
-        // Host CPU executes filter, compaction, discount & hashing in C native
-        uint32_t batch_matches = 0;
-        struct record *dst_rec = (total_records <= 2000000) ? (host_matched_records + host_res.matches) : host_matched_records;
         double t_comp0 = get_time_ms();
-        host_native_advanced_filter(chunk_ptr, records_in_batch,
-                                   QUERY_TYPE, QUERY_MIN_AMT, QUERY_MAX_AMT,
-                                   QUERY_MIN_TS, QUERY_MAX_TS, QUERY_DISC_PCT,
-                                   dst_rec,
-                                   &batch_matches,
-                                   &host_res.sum_amount, &host_res.net_discount_sum,
-                                   &host_res.min_amount, &host_res.max_amount,
-                                   &host_res.hash_accum);
+        uint32_t batch_matches = 0;
+        void *dst = (total_records <= 2000000) ? (void *)(host_matched_records + host_res.matches) : (void *)host_matched_records;
+        run_host_query_batch(records_ptr, records_in_batch,
+                             QUERY_TYPE, QUERY_MIN_AMT, QUERY_MAX_AMT,
+                             QUERY_MIN_TS, QUERY_MAX_TS, QUERY_DISC_PCT,
+                             (struct record *)dst, &batch_matches, &host_res);
         double t_comp1 = get_time_ms();
-
-        host_res.matches += batch_matches;
         host_res.compute_time_ms += (t_comp1 - t_comp0);
-        host_res.host_mem_traffic_bytes += (to_read + batch_matches * sizeof(struct record));
 
         bytes_left -= to_read;
         file_offset += to_read;
     }
     double host_t1 = get_time_ms();
     host_res.total_time_ms = host_t1 - host_t0;
+    if (src == SOURCE_DISK) {
+        free(host_raw_chunk);
+        close(disk_fd);
+    }
 
     double host_thru = ((double)file_bytes / (1024.0 * 1024.0)) / (host_res.total_time_ms / 1000.0);
     printf("  Host Total Time   : %8.2f ms\n", host_res.total_time_ms);
-    printf("  Host Compute Time : %8.2f ms\n", host_res.compute_time_ms);
+    if (src == SOURCE_DISK) {
+        printf("    -> Host Disk IO : %8.2f ms (%.1f%%)\n", host_res.io_time_ms, (host_res.io_time_ms / host_res.total_time_ms) * 100.0);
+    }
+    printf("    -> Host Compute : %8.2f ms (%.1f%%)\n", host_res.compute_time_ms, (host_res.compute_time_ms / host_res.total_time_ms) * 100.0);
     printf("  Host Throughput   : %8.2f MB/s\n", host_thru);
     printf("  Matches / Sum     : %lu matches (%.2f%% selectivity), Gross Sum: $%lu, Net Sum: $%lu\n",
            host_res.matches, ((double)host_res.matches / (double)total_records) * 100.0,
@@ -553,33 +581,46 @@ int main(int argc, char *argv[]) {
            host_res.min_amount, host_res.max_amount, host_res.hash_accum);
 
     // =========================================================================
-    // EXPERIMENT 2: COMPUTATIONAL STORAGE SEQUENTIAL (Simulated ONFI Flash -> SLM)
+    // EXPERIMENT 2: COMPUTATIONAL STORAGE SEQUENTIAL (Non-Pipelined)
     // =========================================================================
     printf("--------------------------------------------------------------------\n");
-    printf("[EXPERIMENT 2] CSD Sequential (Simulated ONFI Flash-to-SRAM Transfer -> Core 3 JIT)\n");
+    printf("[EXPERIMENT 2] CSD Sequential (Fetch Block -> Execute Core 3 JIT -> Return)\n");
     printf("--------------------------------------------------------------------\n");
 
     struct query_summary csd_res = {0};
     csd_res.min_amount = 0xFFFFFFFF;
     csd_res.hash_accum = 0x811C9DC5;
 
+    if (src == SOURCE_DISK) {
+        drop_page_cache();
+        disk_fd = open(dataset_path, O_RDONLY);
+        if (disk_fd < 0) {
+            perror("open dataset for CSD sequential read");
+            return 1;
+        }
+    }
+
     double csd_t0 = get_time_ms();
     bytes_left = file_bytes;
     file_offset = 0;
-    uint16_t cid = 100;
 
     while (bytes_left > 0) {
         uint32_t to_read = (bytes_left > chunk_bytes) ? chunk_bytes : (uint32_t)bytes_left;
         uint32_t records_in_batch = to_read / sizeof(struct record);
 
-        // Step 1: Internal Flash DMA into CSD SLM Buffer A (Simulated ONFI transfer)
-        uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
+        // Fetch chunk into SLM Buffer A
         double t_io0 = get_time_ms();
-        memcpy(ctx_a->records, raw_dataset + template_offset, to_read);
+        if (src == SOURCE_RAM) {
+            uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
+            memcpy(ctx_a->records, raw_dataset + template_offset, to_read);
+        } else {
+            ssize_t rd = pread(disk_fd, ctx_a->records, to_read, file_offset);
+            if (rd != (ssize_t)to_read) break;
+        }
         double t_io1 = get_time_ms();
         csd_res.io_time_ms += (t_io1 - t_io0);
 
-        // Step 2: Configure query in SLM Context
+        // Configure Context in SLM
         ctx_a->record_count = records_in_batch;
         ctx_a->target_type = QUERY_TYPE;
         ctx_a->min_amount = QUERY_MIN_AMT;
@@ -589,7 +630,7 @@ int main(int argc, char *argv[]) {
         ctx_a->discount_pct = QUERY_DISC_PCT;
         __sync_synchronize();
 
-        // Step 3: Offload execution to Core 3 via TP4091 EXECUTE command
+        // Dispatch EXECUTE command to Core 3
         memset(&sqe, 0, sizeof(sqe));
         sqe.opcode = NVME_CMD_EBPF_EXECUTE;
         sqe.flags = NVME_FLAG_SILENT;
@@ -597,14 +638,15 @@ int main(int argc, char *argv[]) {
         sqe.prp1 = SLM_BUF_A_PHYS_ADDR;
 
         double t_comp0 = get_time_ms();
-        if (submit_nvme_cmd_silent(qmem, &sqe, &cqe, 2000) != 0 || cqe.status != 0) {
-            fprintf(stderr, "[HOST ERROR] CSD Execute command failed at offset %lu!\n", (unsigned long)file_offset);
+        if (submit_nvme_cmd_silent(qmem, &sqe, &cqe, 3000) != 0 || cqe.status != 0) {
+            fprintf(stderr, "[ERROR] CSD Execute command failed at offset %lu!\n", (unsigned long)file_offset);
+            drain_vcon();
             break;
         }
         double t_comp1 = get_time_ms();
         csd_res.compute_time_ms += (t_comp1 - t_comp0);
 
-        // Step 4: Host transfers ONLY the in-place compacted matched records!
+        // Transfer compacted matched records to Host
         uint32_t batch_matches = cqe.cdw0;
         if (batch_matches > 0) {
             void *dst = (total_records <= 2000000) ? (void *)(csd_matched_records + csd_res.matches) : (void *)csd_matched_records;
@@ -612,7 +654,6 @@ int main(int argc, char *argv[]) {
             csd_res.host_mem_traffic_bytes += (batch_matches * sizeof(struct record));
         }
 
-        // Accumulate statistics
         csd_res.matches += batch_matches;
         csd_res.sum_amount += ctx_a->sum_amount;
         csd_res.net_discount_sum += ctx_a->net_discount_sum;
@@ -629,10 +670,13 @@ int main(int argc, char *argv[]) {
     }
     double csd_t1 = get_time_ms();
     csd_res.total_time_ms = csd_t1 - csd_t0;
+    if (src == SOURCE_DISK) close(disk_fd);
 
     double csd_thru = ((double)file_bytes / (1024.0 * 1024.0)) / (csd_res.total_time_ms / 1000.0);
     printf("  CSD Total Time    : %8.2f ms\n", csd_res.total_time_ms);
-    printf("    -> ONFI I/O Sim : %8.2f ms (%.1f%%)\n", csd_res.io_time_ms, (csd_res.io_time_ms / csd_res.total_time_ms) * 100.0);
+    printf("    -> %s : %8.2f ms (%.1f%%)\n",
+           (src == SOURCE_RAM) ? "ONFI I/O Sim" : "Disk pread IO",
+           csd_res.io_time_ms, (csd_res.io_time_ms / csd_res.total_time_ms) * 100.0);
     printf("    -> CSD Compute  : %8.2f ms (%.1f%%)\n", csd_res.compute_time_ms, (csd_res.compute_time_ms / csd_res.total_time_ms) * 100.0);
     printf("  CSD Throughput    : %8.2f MB/s\n", csd_thru);
     printf("  Host Memory Recv  : %.2f MB (Only compacted results transferred to Host!)\n", (double)csd_res.host_mem_traffic_bytes / (1024.0 * 1024.0));
@@ -643,7 +687,7 @@ int main(int argc, char *argv[]) {
            csd_res.min_amount, csd_res.max_amount, csd_res.hash_accum);
 
     // =========================================================================
-    // EXPERIMENT 3: COMPUTATIONAL STORAGE PIPELINED (Double-Buffered ONFI Streaming)
+    // EXPERIMENT 3: COMPUTATIONAL STORAGE PIPELINED (Double-Buffered Streaming)
     // =========================================================================
     printf("--------------------------------------------------------------------\n");
     printf("[EXPERIMENT 3] CSD Pipelined (Double-Buffered Streaming with Complete Overlap)\n");
@@ -652,6 +696,15 @@ int main(int argc, char *argv[]) {
     struct query_summary pipe_res = {0};
     pipe_res.min_amount = 0xFFFFFFFF;
     pipe_res.hash_accum = 0x811C9DC5;
+
+    if (src == SOURCE_DISK) {
+        drop_page_cache();
+        disk_fd = open(dataset_path, O_RDONLY);
+        if (disk_fd < 0) {
+            perror("open dataset for CSD pipelined read");
+            return 1;
+        }
+    }
 
     double pipe_t0 = get_time_ms();
     bytes_left = file_bytes;
@@ -669,10 +722,19 @@ int main(int argc, char *argv[]) {
         struct advanced_context *exec_ctx = (cur_buf == 0) ? ctx_b : ctx_a;
         uint64_t fill_phys_addr = (cur_buf == 0) ? SLM_BUF_A_PHYS_ADDR : SLM_BUF_B_PHYS_ADDR;
 
-        // Step 1: Transfer next chunk from RAM into idle buffer while Core 3 processes active buffer
+        // Step 1: Transfer next chunk from storage/RAM into idle buffer
         if (bytes_left > 0) {
-            uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
-            memcpy(fill_ctx->records, raw_dataset + template_offset, to_read);
+            if (src == SOURCE_RAM) {
+                uint32_t template_offset = (uint32_t)(file_offset % template_bytes);
+                memcpy(fill_ctx->records, raw_dataset + template_offset, to_read);
+            } else {
+                ssize_t rd = pread(disk_fd, fill_ctx->records, to_read, file_offset);
+                if (rd != (ssize_t)to_read) {
+                    fprintf(stderr, "[ERROR] pread failed at offset %lu\n", (unsigned long)file_offset);
+                    break;
+                }
+            }
+
             fill_ctx->record_count = records_in_batch;
             fill_ctx->target_type = QUERY_TYPE;
             fill_ctx->min_amount = QUERY_MIN_AMT;
@@ -686,10 +748,10 @@ int main(int argc, char *argv[]) {
             file_offset += to_read;
         }
 
-        // Step 2: Await previous chunk completion & harvest
+        // Step 2: Await completion of previous chunk
         if (core3_active) {
             double start_t = get_time_ms();
-            while ((get_time_ms() - start_t) < 2000) {
+            while ((get_time_ms() - start_t) < 3000) {
                 if (qmem->regs.cq_tail != qmem->regs.cq_head) {
                     uint32_t cq_idx = qmem->regs.cq_head % NVME_QUEUE_DEPTH;
                     struct nvme_cqe cqe_p = qmem->cq[cq_idx];
@@ -723,17 +785,22 @@ int main(int argc, char *argv[]) {
                     }
                 }
             }
+
+            if (core3_active) {
+                fprintf(stderr, "[ERROR] Timeout waiting for CID %u\n", active_cid);
+                drain_vcon();
+                break;
+            }
         }
 
-        // Step 3: Launch Core 3 execution on freshly loaded buffer
-        if (to_read > 0) {
+        // Step 3: Dispatch filled buffer to Core 3
+        if (records_in_batch > 0) {
+            active_cid = ++cid;
             memset(&sqe, 0, sizeof(sqe));
             sqe.opcode = NVME_CMD_EBPF_EXECUTE;
             sqe.flags = NVME_FLAG_SILENT;
-            sqe.cid = ++cid;
+            sqe.cid = active_cid;
             sqe.prp1 = fill_phys_addr;
-
-            active_cid = sqe.cid;
 
             uint32_t tail = qmem->regs.sq_tail;
             qmem->sq[tail % NVME_QUEUE_DEPTH] = sqe;
@@ -742,11 +809,17 @@ int main(int argc, char *argv[]) {
             __sync_synchronize();
 
             core3_active = true;
-            cur_buf = 1 - cur_buf;
+            cur_buf = 1 - cur_buf; // Swap buffers
         }
     }
     double pipe_t1 = get_time_ms();
     pipe_res.total_time_ms = pipe_t1 - pipe_t0;
+    if (src == SOURCE_DISK) close(disk_fd);
+
+    if (contention_enabled) {
+        stop_contention = true;
+        pthread_join(contention_th, NULL);
+    }
 
     double pipe_thru = ((double)file_bytes / (1024.0 * 1024.0)) / (pipe_res.total_time_ms / 1000.0);
     printf("  Pipelined Total   : %8.2f ms\n", pipe_res.total_time_ms);
@@ -784,9 +857,14 @@ int main(int argc, char *argv[]) {
     double true_csd_speedup_pipe = host_storage_baseline_ms / csd_pipe_with_pcie_ms;
 
     printf("====================================================================\n");
-    printf("[FINAL COMPARISON: IN-RAM ARCHITECTURAL MODEL]\n");
+    if (src == SOURCE_RAM) {
+        printf("[FINAL COMPARISON: IN-RAM ARCHITECTURAL MODEL]\n");
+    } else {
+        printf("[FINAL COMPARISON: HOST-CENTRIC vs. NVMe COMPUTATIONAL STORAGE]\n");
+    }
     printf("====================================================================\n");
-    printf("  Metric                  | Host In-RAM      | CSD Sequential   | CSD Pipelined\n");
+    printf("  Metric                  | %-16s | CSD Sequential   | CSD Pipelined\n",
+           (src == SOURCE_RAM) ? "Host In-RAM" : "Host Traditional");
     printf("  ------------------------+------------------+------------------+------------------\n");
     printf("  Total Time              | %14.2f ms | %14.2f ms | %14.2f ms\n",
            host_res.total_time_ms, csd_res.total_time_ms, pipe_res.total_time_ms);
@@ -802,13 +880,17 @@ int main(int argc, char *argv[]) {
     printf("  Host Data Reduction     |             0.0%% | %14.1f%% | %14.1f%%\n",
            data_reduction_pct, data_reduction_pct);
     printf("  ------------------------+------------------+------------------+------------------\n");
-    printf("  In-RAM Speedup vs Host  : %.2fx faster (%.1f%% latency reduction)\n", pipe_speedup, lat_reduct);
-    printf("  CSD PCIe Return IO Time : %10.2f ms (%.2f MB matched data at %.2f MB/s)\n",
-           csd_return_io_ms, (double)pipe_res.host_mem_traffic_bytes / (1024.0 * 1024.0), host_pcie_rate_mb_s);
-    printf("  TRUE CSD vs Host-PCIe   : %.2fx (%.2f ms CSD w/ PCIe return vs %.2f ms Host baseline)\n",
-           true_csd_speedup_seq, csd_seq_with_pcie_ms, host_storage_baseline_ms);
-    printf("  TRUE CSD (Pipelined Ret): %.2fx (%.2f ms CSD overlapped vs %.2f ms Host baseline)\n",
-           true_csd_speedup_pipe, csd_pipe_with_pcie_ms, host_storage_baseline_ms);
+    if (src == SOURCE_RAM) {
+        printf("  In-RAM Speedup vs Host  : %.2fx faster (%.1f%% latency reduction)\n", pipe_speedup, lat_reduct);
+        printf("  CSD PCIe Return IO Time : %10.2f ms (%.2f MB matched data at %.2f MB/s)\n",
+               csd_return_io_ms, (double)pipe_res.host_mem_traffic_bytes / (1024.0 * 1024.0), host_pcie_rate_mb_s);
+        printf("  TRUE CSD vs Host-PCIe   : %.2fx (%.2f ms CSD w/ PCIe return vs %.2f ms Host baseline)\n",
+               true_csd_speedup_seq, csd_seq_with_pcie_ms, host_storage_baseline_ms);
+        printf("  TRUE CSD (Pipelined Ret): %.2fx (%.2f ms CSD overlapped vs %.2f ms Host baseline)\n",
+               true_csd_speedup_pipe, csd_pipe_with_pcie_ms, host_storage_baseline_ms);
+    } else {
+        printf("  Pipelined Speedup vs Host : %.2fx faster (%.1f%% latency reduction)\n", pipe_speedup, lat_reduct);
+    }
     printf("  Host Memory Bus Saved   : %.1f%% of raw data discarded at storage level!\n", data_reduction_pct);
 
     // Mathematical verification across all modes
@@ -828,7 +910,13 @@ int main(int argc, char *argv[]) {
     }
     printf("====================================================================\n");
 
-    free(raw_dataset);
+    if (show_vcon) {
+        printf("\n[CORE3 VCON LOG DUMP]\n");
+        drain_vcon();
+        printf("---------------------\n");
+    }
+
+    if (raw_dataset) free(raw_dataset);
     free(host_matched_records);
     free(csd_matched_records);
     free(pipe_matched_records);

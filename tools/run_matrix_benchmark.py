@@ -8,7 +8,7 @@ import csv
 from collections import defaultdict
 
 def run_benchmark(chunk_size):
-    cmd = ["sudo", "./host/host_advanced_loader", "/mnt/nvme/dataset_1m.bin", str(chunk_size)]
+    cmd = ["sudo", "./host/host_loader", "--disk", "/mnt/nvme/dataset_1m.bin", str(chunk_size)]
     print(f"  Running: {' '.join(cmd)}")
     
     try:
@@ -51,8 +51,8 @@ def run_benchmark(chunk_size):
     return metrics
 
 def main():
-    if not os.path.exists("./host/host_advanced_loader"):
-        print("Error: ./host/host_advanced_loader not found. Please run 'make all' first.")
+    if not os.path.exists("./host/host_loader"):
+        print("Error: ./host/host_loader not found. Please run 'make all' first.")
         sys.exit(1)
         
     chunk_sizes = [256, 512, 1024]

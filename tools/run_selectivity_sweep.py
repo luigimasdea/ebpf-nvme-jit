@@ -18,7 +18,7 @@ DEFAULT_CHUNK_KB = 1024
 SELECTIVITIES = [3, 10, 25, 50, 75, 100]
 
 def run_benchmark(size_mb, chunk_kb, sel_pct):
-    cmd = ["sudo", "./host/host_ram_loader", "--stream", str(size_mb), str(chunk_kb), str(sel_pct)]
+    cmd = ["sudo", "./host/host_loader", "--stream", str(size_mb), str(chunk_kb), str(sel_pct)]
     
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True)
@@ -85,8 +85,8 @@ def run_benchmark(size_mb, chunk_kb, sel_pct):
     return metrics
 
 def main():
-    if not os.path.exists("./host/host_ram_loader"):
-        print("Error: ./host/host_ram_loader not found. Please run 'make host' first.")
+    if not os.path.exists("./host/host_loader"):
+        print("Error: ./host/host_loader not found. Please run 'make host' first.")
         sys.exit(1)
 
     size_mb = DEFAULT_SIZE_MB

@@ -9,8 +9,9 @@
 *.symvers
 
 build/
-host/host_manager
 host/host_benchmark
+host/host_loader
+host/host_manager
 host/host_storage_loader
 host/host_advanced_loader
 host/host_ram_loader

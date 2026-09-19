@@ -26,7 +26,7 @@ help:
 	@echo "Targets:"
 	@echo "  make all       - Build firmware, host monitor, eBPF apps, and kick_core"
 	@echo "  make firmware  - Build generic bare-metal firmware (firmware/build/firmware.bin)"
-	@echo "  make host      - Build userspace host manager (host/host_manager)"
+	@echo "  make host      - Build userspace host tools (host/host_benchmark & host/host_loader)"
 	@echo "  make app       - Compile eBPF app binaries (analytics_simple.bin & analytics_advanced.bin)"
 	@echo "  make kick      - Build kernel module kicker (tools/kick_core/vf2_kick.ko)"
 	@echo "  make clean     - Clean all build artifacts"
