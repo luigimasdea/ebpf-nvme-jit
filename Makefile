@@ -61,5 +61,5 @@ clean:
 	$(MAKE) -C firmware clean
 	$(MAKE) -C host clean
 	$(MAKE) -C tools/kick_core clean
-	rm -rf firmware/build apps/build $(APP_SIMPLE_BIN) $(APP_ADV_BIN) tools/generate_dataset
+	rm -rf build firmware/build apps/build $(APP_SIMPLE_BIN) $(APP_ADV_BIN) tools/generate_dataset
 
