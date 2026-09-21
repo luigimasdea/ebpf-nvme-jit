@@ -78,7 +78,7 @@ def main():
 
     ax.set_ylabel('Effective Throughput (MB/s)')
     ax.set_xlabel('Streaming Chunk Size (KB)')
-    ax.set_title('Physical NVMe SSD Streaming Benchmark (PCIe 2.0 x1 Bottleneck)')
+    ax.set_title('SSD Streaming Benchmark (PCIe 2.0 Bottleneck)')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{c} KB' for c in chunks])
     ax.legend(loc='upper right', frameon=True)
@@ -151,7 +151,7 @@ def main():
 
     color1 = '#D0021B'
     ax1.set_xlabel('Chunk Size (KB)')
-    ax1.set_ylabel('PCIe SSD Pipelined Throughput (MB/s)', color=color1)
+    ax1.set_ylabel('SSD Pipelined Throughput (MB/s)', color=color1)
     line1 = ax1.errorbar(chunks, pipe_thru, yerr=pipe_std, fmt='o-', color=color1,
                          linewidth=2.5, markersize=8, capsize=5, label='Physical PCIe SSD (I/O-Bound)')
     ax1.tick_params(axis='y', labelcolor=color1)

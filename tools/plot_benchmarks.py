@@ -102,7 +102,7 @@ def generate_plots(csv_path="benchmark_results.csv", output_dir="../docs"):
     ax.set_yscale('log')
     ax.set_xlabel('Dataset Size (Number of 16-byte Records, Log Scale)')
     ax.set_ylabel('Execution Latency (ms, Log Scale)')
-    ax.set_title('In-Memory Query Latency: Host Native vs. CSD eBPF JIT')
+    ax.set_title('In-Memory Query Latency')
     ax.grid(True, which="both", ls="--", alpha=0.5)
     ax.legend(loc='upper left', frameon=True)
 
@@ -158,7 +158,7 @@ def generate_plots(csv_path="benchmark_results.csv", output_dir="../docs"):
 
     ax.set_xlabel('Dataset Size (Records)')
     ax.set_ylabel('Relative Efficiency (% of GCC -O2)')
-    ax.set_title('Compilatore JIT Bare-Metal: Efficienza Relativa vs GCC -O2')
+    ax.set_title('Relative Efficiency vs GCC -O2')
     ax.set_ylim(40, 115)
     ax.grid(True, linestyle='--', alpha=0.5)
     ax.legend(loc='lower right', frameon=True)
