@@ -47,7 +47,7 @@ uint64_t app_entry(struct advanced_context *ctx) {
     uint32_t min_ts = ctx->min_timestamp;
     uint32_t max_ts = ctx->max_timestamp;
     uint32_t disc = ctx->discount_pct;
-    uint32_t multiplier = (disc < 100) ? (100 - disc) : 100;
+    uint32_t multiplier = (disc <= 100) ? (100 - disc) : 0;
 
     uint32_t match_count = 0;
     uint32_t sum = 0;

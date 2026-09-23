@@ -68,7 +68,7 @@ static void host_native_advanced_filter(const struct record *records, uint32_t c
     uint32_t min_v = 0xFFFFFFFF;
     uint32_t max_v = 0;
     uint32_t hash = 0x811C9DC5;
-    uint32_t multiplier = (discount_pct < 100) ? (100 - discount_pct) : 100;
+    uint32_t multiplier = (discount_pct <= 100) ? (100 - discount_pct) : 0;
 
     for (uint32_t i = 0; i < count; i++) {
         uint32_t r_id = records[i].id;

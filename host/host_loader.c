@@ -183,23 +183,25 @@ static void run_host_query_batch(const struct record *records, uint32_t count,
                                  struct record *out_matches, uint32_t *out_matches_count,
                                  struct query_summary *summary) {
     uint32_t local_matches = 0;
+    uint32_t batch_hash = 0x811C9DC5; // FNV-1a 32-bit offset basis (per-batch)
+    uint32_t multiplier = (disc_pct <= 100) ? (100 - disc_pct) : 0;
+
     for (uint32_t i = 0; i < count; i++) {
         struct record r = records[i];
-        if (r.type == target_type &&
+        if ((target_type == 0 || r.type == target_type) &&
             r.amount >= min_amt && r.amount <= max_amt &&
             r.timestamp >= min_ts && r.timestamp <= max_ts) {
 
-            uint32_t net = (r.amount * (100 - disc_pct)) / 100;
+            uint32_t net = (r.amount * multiplier) / 100;
             summary->sum_amount += r.amount;
             summary->net_discount_sum += net;
             if (r.amount < summary->min_amount) summary->min_amount = r.amount;
             if (r.amount > summary->max_amount) summary->max_amount = r.amount;
 
-            // FNV-1a Hash
-            summary->hash_accum ^= r.id;
-            summary->hash_accum *= 16777619;
-            summary->hash_accum ^= r.amount;
-            summary->hash_accum *= 16777619;
+            // FNV-1a Hash (aligned with analytics_advanced.c)
+            batch_hash ^= r.id;
+            batch_hash = (batch_hash * 16777619) ^ (r.amount << 1);
+            batch_hash ^= (r.timestamp >> 3);
 
             if (out_matches) {
                 out_matches[local_matches] = r;
@@ -208,6 +210,7 @@ static void run_host_query_batch(const struct record *records, uint32_t count,
         }
     }
     summary->matches += local_matches;
+    summary->hash_accum ^= batch_hash;
     if (out_matches_count) *out_matches_count = local_matches;
 }
 
@@ -902,7 +905,8 @@ int main(int argc, char *argv[]) {
                  (host_res.sum_amount == csd_res.sum_amount && host_res.sum_amount == pipe_res.sum_amount) &&
                  (host_res.net_discount_sum == csd_res.net_discount_sum && host_res.net_discount_sum == pipe_res.net_discount_sum) &&
                  (host_res.min_amount == csd_res.min_amount && host_res.min_amount == pipe_res.min_amount) &&
-                 (host_res.max_amount == csd_res.max_amount && host_res.max_amount == pipe_res.max_amount);
+                 (host_res.max_amount == csd_res.max_amount && host_res.max_amount == pipe_res.max_amount) &&
+                 (host_res.hash_accum == csd_res.hash_accum && host_res.hash_accum == pipe_res.hash_accum);
 
     if (match) {
         printf("  [VERIFICATION] SUCCESS: All 3 execution modes yielded 100%% identical results!\n");
