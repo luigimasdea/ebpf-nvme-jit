@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 
+#define MAX_BPF_PROG_LEN 4096
+
 /**
  * Compiles eBPF instructions into RISC-V machine code.
  * @param prog Pointer to the array of eBPF instructions.

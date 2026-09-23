@@ -101,7 +101,7 @@ void jit_set_memory_target(uint32_t *target) {
 }
 
 // Offset Map: Stores the starting RISC-V instruction index for each eBPF instruction
-static uint32_t insn_offsets[512];
+static uint32_t insn_offsets[MAX_BPF_PROG_LEN + 1];
 
 typedef enum {
   PASS_ANALYZE, // First pass: Calculate offsets and program size
@@ -626,35 +626,24 @@ static void emit_epilogue() {
 
 // Helper: Load a 64-bit immediate into a RISC-V register
 static void emit_load_imm64(uint8_t rd, uint64_t imm) {
-  // LUI + ADDI for the lowest 32 bits
   int32_t low = (int32_t)(imm & 0xFFFFFFFF);
-  emit_load_imm(rd, low);
-
-  // If there are high bits, we need to shift and add
   uint32_t high = (uint32_t)(imm >> 32);
+
   if (high != 0) {
-    // We already loaded the low 32 bits into rd.
-    // However, emit_load_imm uses LUI which clears the upper bits of rd in 32-bit but sign-extends in 64-bit.
-    // On RV64, LUI rd, imm sign-extends the 32-bit value.
-    
-    // Better way for 64-bit:
-    // 1. Load high 32 bits into T1
+    // 1. Load high 32 bits into T1 and shift left by 32
     emit_load_imm(RV_REG_T1, high);
-    // 2. Shift T1 left by 32
     emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T1, RV_F3_SLL, RV_REG_T1, 32));
-    // 3. Zero-extend the low 32 bits we already have in rd (if they were sign-extended)
-    // Actually, let's just load low 32 bits into T0, zero-extend it, and OR it.
+
+    // 2. Load low 32 bits into T0 and zero-extend
     emit_load_imm(RV_REG_T0, low);
     emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_SLL, RV_REG_T0, 32));
     emit_rv32(RV_MAKE_I(RV_OP_IMM, RV_REG_T0, RV_F3_SRL, RV_REG_T0, 32));
-    
-    // Combine
+
+    // 3. Combine into destination register
     emit_rv32(RV_MAKE_R(RV_OP_ALU, rd, RV_F3_OR, RV_REG_T1, RV_REG_T0, RV_F7_ADD));
   } else {
-    // If high bits are 0, we still need to ensure the low bits are zero-extended if we want a 64-bit unsigned load
-    // But eBPF LD_IMM64 is usually for full 64-bit.
-    // emit_load_imm(rd, low) sign-extends on RV64.
-    // To zero-extend:
+    // If high bits are 0, load low 32 bits into rd and zero-extend
+    emit_load_imm(rd, low);
     emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SLL, rd, 32));
     emit_rv32(RV_MAKE_I(RV_OP_IMM, rd, RV_F3_SRL, rd, 32));
   }
@@ -709,6 +698,10 @@ static void generate_insn(struct ebpf_inst inst, struct ebpf_inst next, int i) {
  * MAIN COMPILER ENTRY POINT
  * ========================================================================= */
 void compile_ebpf(struct ebpf_inst *prog, int len) {
+  if (!prog || len <= 0 || len > MAX_BPF_PROG_LEN) {
+    return;
+  }
+
   // Pre-analysis: Initialize register caching for spilled stack slots
   reset_stack_cache();
   for (int i = 0; i < len; i++) {
@@ -765,6 +758,7 @@ uint64_t run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx)
   asm volatile("fence rw, rw");
   asm volatile("fence.i");
 
+#ifdef JIT_DEBUG_DUMP
   uart_print("[DEBUG] JIT Memory Dump:\n");
   for (int i = 0; i < pc_riscv; i++) {
     uart_print("  [");
@@ -773,6 +767,7 @@ uint64_t run_jit_filter(struct ebpf_inst *prog, int num_instructions, void *ctx)
     uart_print_hex(jit_memory[i]);
     uart_print("\n");
   }
+#endif
 
   uint64_t (*filter)(void *ctx) = (uint64_t (*)(void *))jit_memory;
   return filter(ctx);

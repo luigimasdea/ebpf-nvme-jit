@@ -61,7 +61,7 @@ int main() {
 
         switch (sqe.opcode) {
             case NVME_CMD_EBPF_LOAD: {
-                if (sqe.prp1 == 0 || sqe.cdw10 == 0) {
+                if (sqe.prp1 == 0 || sqe.cdw10 == 0 || sqe.cdw10 > MAX_BPF_PROG_LEN) {
                     if (!silent) uart_print("[NVMe JIT] LOAD error: invalid prp1 or instruction count!\n");
                     nvme_post_cqe(sqe.cid, 0, 0, 1);
                     break;
